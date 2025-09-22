@@ -1,22 +1,29 @@
-<!--
-Auto‑Mesh Voice Chat
-- Client: Single HTML page (audio‑only) that auto‑connects everyone in the same room.
-- Signaling: Minimal WebSocket broadcast server (provided below for Node.js or Cloudflare Workers).
+/**
+ * Single-Room Voice Chat — one room, auto-connect everyone
+ * Run:
+ *   npm i express ws
+ *   node single-room-voicechat-server.js
+ * Open: http://localhost:3000  (open from 2+ devices/browsers)
+ *
+ * Notes:
+ * - Audio-only WebRTC (no Firebase). Tiny WebSocket signaling at /ws.
+ * - Full mesh: good for ~2–4 people. Use SFU for larger groups.
+ * - TURN optional (fill ICE_SERVERS in the client HTML below if needed).
+ */
 
-How it works
-1) Open the client page on multiple devices/browsers with the SAME ?room=xxxx (defaults to "lobby").
-2) Each client joins the room over WebSocket, auto‑calls everyone else (full mesh), and auto‑answers incoming.
-3) Audio‑only. No Firebase. TURN optional (recommended for tougher NATs).
+const express = require('express');
+const { WebSocketServer } = require('ws');
+const http = require('http');
 
-Limits
-- Full mesh works best for ~2–4 people. For larger groups, use an SFU.
--->
-<!doctype html>
+const app = express();
+
+// ---- Serve a single inlined HTML page ----
+const CLIENT_HTML = `<!doctype html>
 <html lang="th">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Auto‑Mesh Voice Chat (WebRTC + WS signaling)</title>
+  <title>Voice Chat — ห้องเดียว (Auto connect)</title>
   <style>
     :root{--bg:#0b1220;--card:#111827;--muted:#9CA3AF;--b:#1f2937;--pri:#8b5cf6}
     *{box-sizing:border-box}
@@ -25,121 +32,92 @@ Limits
     h1{margin:0 0 6px;color:var(--pri)}
     .muted{color:var(--muted)}
     .card{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px;margin-top:12px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    code{background:#0b1220;border:1px solid var(--b);padding:2px 6px;border-radius:6px}
-    button{cursor:pointer;border:0;border-radius:10px;padding:8px 12px;font-weight:700}
-    .btn{background:var(--pri);color:#fff}
-    audio{width:100%}
-    .pill{font-size:12px;border:1px solid #2a385c;background:#0e1730;padding:2px 8px;border-radius:999px}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+    audio{width:100%}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    button{cursor:pointer;border:0;border-radius:10px;padding:8px 12px;font-weight:700}
+    .ghost{background:#1f2937;color:#e5e7eb}
+    .pill{font-size:12px;border:1px solid #2a385c;background:#0e1730;padding:2px 8px;border-radius:999px}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>📞 Auto‑Mesh Voice Chat</h1>
-    <p class="muted">เปิดหน้าเดียวกันพร้อมกันในห้องเดียวกัน ทุกคนจะเชื่อมต่อเสียงถึงกันอัตโนมัติ (ไม่ใช้ Firebase). ต้องมี <b>WebSocket signaling</b> เล็กๆ หนึ่งจุด (มีตัวอย่างให้ด้านล่าง).</p>
-
+    <h1>📞 ห้องเดียว — เชื่อมอัตโนมัติ</h1>
     <div class="card">
       <div class="row">
         <div>Room:</div>
-        <code id="room"></code>
-        <div class="pill" id="myid"></div>
-        <button id="btnMute" class="">🔇 ปิด/เปิดไมค์</button>
+        <span class="pill">lobby</span>
+        <span id="myid" class="pill"></span>
+        <button id="btnMute" class="ghost">🔇 ปิด/เปิดไมค์</button>
       </div>
       <div id="status" class="muted" style="margin-top:8px">เตรียมพร้อม…</div>
     </div>
-
     <div class="card">
       <h3>เสียงจากเพื่อนร่วมห้อง</h3>
       <div id="peers" class="grid"></div>
-      <p class="muted" style="margin-top:8px">เข้ม NAT มากๆ อาจต้องใช้ TURN. เติมในตัวแปร <code>ICE_SERVERS</code> ด้านล่าง</p>
+      <p class="muted" style="margin-top:8px">* ถ้าเชื่อมไม่ติดในบางเครือข่าย ให้เพิ่ม TURN ในตัวแปร ICE_SERVERS ด้านล่าง</p>
     </div>
   </div>
 
 <script>
 // ====== Config ======
 const SIGNAL_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
-// If your signaling runs elsewhere, set e.g. 'wss://your-domain.example/ws'
-
+const ROOM = 'lobby'; // single room only
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
-  // Optional TURN example:
-  // { urls:'turn:YOUR_TURN_HOST:3478', username:'user', credential:'pass' }
+  // { urls:'turn:YOUR_TURN_HOST:3478', username:'user', credential:'pass' },
 ];
 
 // ====== Helpers ======
-const params = new URLSearchParams(location.search);
-const ROOM = params.get('room') || 'lobby';
 const MY_ID = Math.random().toString(36).slice(2,10);
-const log = (...a)=>{ console.log('[client]', ...a); };
 const $ = (id)=>document.getElementById(id);
-$('room').textContent = ROOM;
 $('myid').textContent = 'ID: '+MY_ID;
-
 function setStatus(t){ $('status').textContent = t; }
+const log = (...a)=>console.log('[client]', ...a);
 
-// ====== Signaling (WebSocket) protocol ======
-// Messages: {type, room, from, to?, payload}
-// types: 'join', 'peers', 'offer', 'answer', 'ice', 'leave'
+// ====== WebSocket signaling ======
 let ws;
 function wsSend(msg){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
 
-// ====== WebRTC state ======
+// ====== WebRTC ======
 let localStream;
 const pcs = new Map(); // peerId -> RTCPeerConnection
-const senders = new Map(); // peerId -> RTCRtpSender[]
 
 function createPeer(peerId){
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   pcs.set(peerId, pc);
-
-  pc.onicecandidate = (ev)=>{
-    if (ev.candidate) wsSend({ type:'ice', room:ROOM, from:MY_ID, to:peerId, payload:ev.candidate });
-  };
-  pc.oniceconnectionstatechange = ()=>{
-    log(peerId, 'ice:', pc.iceConnectionState);
-    if (['failed','disconnected','closed'].includes(pc.iceConnectionState)) removePeerEl(peerId);
-  };
-  pc.ontrack = (ev)=>{
-    attachRemoteAudio(peerId, ev.streams[0]);
-  };
+  pc.onicecandidate = (ev)=>{ if (ev.candidate) wsSend({ type:'ice', room:ROOM, from:MY_ID, to:peerId, payload:ev.candidate }); };
+  pc.oniceconnectionstatechange = ()=>{ log(peerId,'ice:',pc.iceConnectionState); if(['failed','disconnected','closed'].includes(pc.iceConnectionState)) removePeerEl(peerId); };
+  pc.ontrack = (ev)=> attachRemoteAudio(peerId, ev.streams[0]);
   return pc;
 }
 
 function attachRemoteAudio(peerId, stream){
-  let el = document.getElementById('aud_'+peerId);
-  if (!el){
-    const wrap = document.createElement('div');
-    wrap.id = 'wrap_'+peerId; wrap.className = 'card';
-    const title = document.createElement('div');
-    title.textContent = 'Peer '+peerId;
-    const audio = document.createElement('audio');
-    audio.id = 'aud_'+peerId; audio.autoplay = true; audio.playsInline = true; audio.controls = true;
+  let wrap = document.getElementById('wrap_'+peerId);
+  if (!wrap){
+    wrap = document.createElement('div'); wrap.id = 'wrap_'+peerId; wrap.className = 'card';
+    const title = document.createElement('div'); title.textContent = 'Peer '+peerId;
+    const audio = document.createElement('audio'); audio.id = 'aud_'+peerId; audio.autoplay = true; audio.playsInline = true; audio.controls = true;
     wrap.appendChild(title); wrap.appendChild(audio);
     $('peers').appendChild(wrap);
-    el = audio;
   }
-  el.srcObject = stream;
+  const audio = document.getElementById('aud_'+peerId);
+  audio.srcObject = stream;
 }
 
-function removePeerEl(peerId){
-  const wrap = document.getElementById('wrap_'+peerId);
-  if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
-}
+function removePeerEl(peerId){ const wrap = document.getElementById('wrap_'+peerId); if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); }
 
 async function ensureMic(){
   if (localStream) return localStream;
-  localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+  try{ localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false }); }
+  catch(e){ setStatus('ต้องอนุญาตไมค์ก่อนใช้งาน'); throw e; }
   return localStream;
 }
 
 async function callPeer(peerId){
   const pc = pcs.get(peerId) || createPeer(peerId);
   const stream = await ensureMic();
-  const sArr = [];
-  stream.getTracks().forEach(t=> sArr.push(pc.addTrack(t, stream)));
-  senders.set(peerId, sArr);
-
+  stream.getTracks().forEach(t=> pc.addTrack(t, stream));
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   wsSend({ type:'offer', room:ROOM, from:MY_ID, to:peerId, payload:offer });
@@ -148,10 +126,7 @@ async function callPeer(peerId){
 async function handleOffer(from, offer){
   const pc = pcs.get(from) || createPeer(from);
   const stream = await ensureMic();
-  const sArr = [];
-  stream.getTracks().forEach(t=> sArr.push(pc.addTrack(t, stream)));
-  senders.set(from, sArr);
-
+  stream.getTracks().forEach(t=> pc.addTrack(t, stream));
   await pc.setRemoteDescription(new RTCSessionDescription(offer));
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
@@ -165,15 +140,10 @@ async function handleAnswer(from, answer){
 
 function handleIce(from, cand){
   const pc = pcs.get(from) || createPeer(from);
-  try { pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e){ log('ICE add error', e); }
+  try{ pc.addIceCandidate(new RTCIceCandidate(cand)); }catch(e){ log('ICE add error', e); }
 }
 
-function cleanup(){
-  pcs.forEach((pc, id)=>{ try{ pc.getSenders().forEach(s=> s.track && s.track.stop()); }catch{} try{ pc.close(); }catch{} });
-  pcs.clear(); senders.clear();
-}
-
-// UI controls
+// UI
 $('btnMute').addEventListener('click', ()=>{
   if (!localStream) return;
   localStream.getAudioTracks().forEach(t=> t.enabled = !t.enabled);
@@ -182,143 +152,79 @@ $('btnMute').addEventListener('click', ()=>{
 
 // Start
 (async function main(){
+  await ensureMic();
   setStatus('เชื่อมต่อเซิร์ฟเวอร์สัญญาณ…');
-  try { await ensureMic(); } catch(e){ setStatus('ต้องอนุญาตไมค์ก่อนใช้งาน'); return; }
-
   ws = new WebSocket(SIGNAL_URL);
-  ws.onopen = ()=>{
-    setStatus('เข้าห้อง '+ROOM+' แล้ว');
-    wsSend({ type:'join', room:ROOM, from:MY_ID });
-  };
+  ws.onopen = ()=>{ setStatus('เข้าห้องแล้ว'); wsSend({ type:'join', room:ROOM, from:MY_ID }); };
+  ws.onclose = ()=> setStatus('สัญญาณตัดการเชื่อมต่อ');
   ws.onmessage = async (ev)=>{
     const msg = JSON.parse(ev.data||'{}');
     if (msg.room !== ROOM) return;
-    if (msg.from === MY_ID) return; // ignore own
-
+    if (msg.from === MY_ID) return;
     switch(msg.type){
-      case 'peers':{
-        // server sends current peer list (excluding me). Auto-call all.
-        (msg.payload||[]).forEach(pid=>{ if (pid !== MY_ID) callPeer(pid); });
-        break;
-      }
-      case 'join':{
-        // someone new joined → I call them (to avoid double offer, simple rule: everyone calls newcomers)
-        callPeer(msg.from);
-        break;
-      }
-      case 'offer':{
-        if (msg.to === MY_ID) handleOffer(msg.from, msg.payload);
-        break;
-      }
-      case 'answer':{
-        if (msg.to === MY_ID) handleAnswer(msg.from, msg.payload);
-        break;
-      }
-      case 'ice':{
-        if (msg.to === MY_ID) handleIce(msg.from, msg.payload);
-        break;
-      }
-      case 'leave':{
-        removePeerEl(msg.from);
-        const pc = pcs.get(msg.from); if (pc){ try{ pc.close(); }catch{} pcs.delete(msg.from); }
-        break;
-      }
+      case 'peers': (msg.payload||[]).forEach(pid=> callPeer(pid)); break; // auto-call everyone present
+      case 'join': callPeer(msg.from); break; // call newcomers
+      case 'offer': if (msg.to === MY_ID) handleOffer(msg.from, msg.payload); break;
+      case 'answer': if (msg.to === MY_ID) handleAnswer(msg.from, msg.payload); break;
+      case 'ice': if (msg.to === MY_ID) handleIce(msg.from, msg.payload); break;
+      case 'leave': removePeerEl(msg.from); const pc = pcs.get(msg.from); if (pc){ try{ pc.close(); }catch{} pcs.delete(msg.from); } break;
     }
   };
-  ws.onclose = ()=>{ setStatus('สัญญาณตัดการเชื่อมต่อ'); cleanup(); };
-  window.addEventListener('beforeunload', ()=>{ try{ wsSend({type:'leave', room:ROOM, from:MY_ID}); }catch{} });
+  window.addEventListener('beforeunload', ()=>{ try{ wsSend({ type:'leave', room:ROOM, from:MY_ID }); }catch{} });
 })();
 </script>
 </body>
-</html>
+</html>`;
 
-<!-- ================== Tiny Signaling Server (Option A: Node.js) ==================
-Save as server.js, install deps, run:
-  npm i ws express
-  node server.js
-Then host the above HTML and proxy /ws to this server (or serve it together).
+app.get('/', (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(CLIENT_HTML);
+});
 
-const express = require('express');
-const { WebSocketServer } = require('ws');
-const app = express();
-const httpServer = app.listen(process.env.PORT || 3000, ()=>console.log('HTTP on', httpServer.address().port));
-const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+const server = http.createServer(app);
 
-const rooms = new Map(); // room -> Set(ws)
-function listIds(room){ return Array.from(rooms.get(room)||[]).map(c=>c.id); }
+// ---- Tiny single-room signaling over WebSocket ----
+const wss = new WebSocketServer({ server, path: '/ws' });
+const clients = new Set(); // single room: everyone here
 
-wss.on('connection', (ws, req)=>{
+wss.on('connection', (ws) => {
   ws.id = Math.random().toString(36).slice(2,10);
-  ws.room = null;
-  ws.on('message', (buf)=>{
-    let msg = {}; try{ msg = JSON.parse(buf.toString()); }catch{}
+  clients.add(ws);
+
+  ws.on('message', (buf) => {
+    let msg = {}; try { msg = JSON.parse(buf.toString()); } catch {}
     const { type, room, from, to, payload } = msg;
-    if (type === 'join'){
-      ws.id = from || ws.id; ws.room = room;
-      if (!rooms.has(room)) rooms.set(room, new Set());
-      rooms.get(room).add(ws);
-      // send current peers
-      const peers = listIds(room).filter(id=> id !== ws.id);
-      ws.send(JSON.stringify({ type:'peers', room, from:'server', payload:peers }));
-      // notify others that this peer joined
-      rooms.get(room).forEach(c=>{ if (c !== ws) c.send(JSON.stringify({ type:'join', room, from: ws.id })); });
+
+    if (type === 'join') {
+      // send current peers to the new joiner (excluding self)
+      const peers = Array.from(clients).filter(c => c !== ws).map(c => c.id);
+      ws.send(JSON.stringify({ type:'peers', room:'lobby', from:'server', payload: peers }));
+      // notify others about this joiner
+      broadcast({ type:'join', room:'lobby', from: from || ws.id }, ws);
+      ws.id = from || ws.id; // align to client-provided id
       return;
     }
-    if (!ws.room) return;
-    // relay targeted messages within room
-    if (['offer','answer','ice','leave'].includes(type)){
-      rooms.get(ws.room)?.forEach(c=>{
-        if (!to || c.id === to){ c.send(JSON.stringify({ type, room: ws.room, from, to, payload })); }
+
+    if (['offer','answer','ice','leave'].includes(type)) {
+      // relay targeted messages
+      clients.forEach(c => {
+        if (!to || c.id === to) {
+          try { c.send(JSON.stringify({ type, room:'lobby', from: from || ws.id, to, payload })); } catch {}
+        }
       });
     }
   });
-  ws.on('close', ()=>{
-    const set = rooms.get(ws.room); if (set){ set.delete(ws); set.forEach(c=> c.send(JSON.stringify({ type:'leave', room: ws.room, from: ws.id }))); if (!set.size) rooms.delete(ws.room); }
+
+  ws.on('close', () => {
+    clients.delete(ws);
+    broadcast({ type:'leave', room:'lobby', from: ws.id });
   });
 });
 
-// ============================================================================= -->
-
-<!-- ================== Tiny Signaling Server (Option B: Cloudflare Workers) ==================
-// Deploy as a Worker; bind a Durable Object named "Hub" as HUB. Then map route /ws to this Worker.
-export default {
-  fetch(request, env) {
-    const url = new URL(request.url);
-    if (url.pathname === '/ws') return env.HUB.fetch(request);
-    return new Response('OK', { status: 200 });
-  }
+function broadcast(obj, exclude){
+  const data = JSON.stringify(obj);
+  clients.forEach(c => { if (c !== exclude) { try { c.send(data); } catch {} } });
 }
 
-export class Hub {
-  constructor(state, env){ this.state = state; this.env = env; this.conns = new Map(); }
-  async fetch(request){
-    if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 400 });
-    const [client, server] = Object.values(new WebSocketPair());
-    const id = Math.random().toString(36).slice(2,10);
-    this.state.acceptWebSocket(server, [id]);
-    return new Response(null, { status: 101, webSocket: client });
-  }
-  webSocketMessage(ws, msg){
-    let data={}; try{ data = JSON.parse(msg); }catch{}
-    const { type, room, from, to } = data;
-    if (type === 'join'){
-      ws.id = from; ws.room = room;
-      if (!this.rooms) this.rooms = new Map();
-      if (!this.rooms.has(room)) this.rooms.set(room, new Set());
-      this.rooms.get(room).add(ws);
-      const peers = Array.from(this.rooms.get(room)).map(c=>c.id).filter(id=>id!==ws.id);
-      ws.send(JSON.stringify({ type:'peers', room, from:'server', payload:peers }));
-      this.rooms.get(room).forEach(c=>{ if (c!==ws) c.send(JSON.stringify({ type:'join', room, from: ws.id })); });
-      return;
-    }
-    if (!ws.room) return;
-    if (['offer','answer','ice','leave'].includes(type)){
-      this.rooms.get(ws.room)?.forEach(c=>{ if (!to || c.id === to) c.send(JSON.stringify({ ...data })); });
-    }
-  }
-  webSocketClose(ws){
-    if (!this.rooms) return;
-    const set = this.rooms.get(ws.room); if (set){ set.delete(ws); set.forEach(c=> c.send(JSON.stringify({ type:'leave', room: ws.room, from: ws.id }))); if (!set.size) this.rooms.delete(ws.room); }
-  }
-}
-// ============================================================================= -->
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log('Single-room voice chat on http://localhost:'+PORT));
