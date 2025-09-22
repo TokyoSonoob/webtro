@@ -3,371 +3,92 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>โทรคุยกันบนหน้าเว็บ (WebRTC + Firebase)</title>
+  <title>โทรคุยทันที (WebRTC Test)</title>
   <style>
-    :root { --bg:#0b1220; --card:#111827; --muted:#9CA3AF; --pri:#8b5cf6; --ok:#22c55e; --bad:#ef4444; }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:#fff;font:16px/1.4 system-ui,Segoe UI,Roboto,Arial}
-    .wrap{max-width:980px;margin:0 auto;padding:16px}
-    .row{display:flex;gap:12px;flex-wrap:wrap}
-    .card{background:var(--card);border:1px solid #1f2937;border-radius:16px;padding:14px}
-    .col{flex:1 1 300px}
-    button{cursor:pointer;border:0;border-radius:12px;padding:10px 14px;font-weight:700}
-    .btn{background:var(--pri);color:white}
-    .btn:disabled{opacity:.5;cursor:not-allowed}
-    .ghost{background:#1f2937;color:#e5e7eb}
-    input,select{width:100%;padding:10px;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#fff}
-    .muted{color:var(--muted)}
-    .online{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--ok);margin-right:6px}
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
-    .item{padding:10px;border-radius:12px;background:#0f1628;border:1px solid #1f2937;display:flex;align-items:center;justify-content:space-between;gap:8px}
-    .item .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .pill{font-size:12px;padding:3px 8px;border-radius:999px;background:#0b1220;border:1px solid #293142;color:#9fb0d0}
-    .video-wrap{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    video{width:100%;background:#000;border-radius:12px}
-    .small{font-size:12px}
-    .badge{font-size:11px;background:#1f2a44;border:1px solid #2c3b60;border-radius:999px;padding:2px 8px;margin-left:6px}
-    .incoming{border:1px dashed #374151}
-    .callbar{display:flex;gap:8px;flex-wrap:wrap}
-    .danger{background:var(--bad);}
+    body { background:#0b1220; color:white; font-family:sans-serif; margin:0; padding:20px; }
+    h1 { color:#8b5cf6; }
+    video { width:45%; background:black; border-radius:12px; margin:5px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>📞 โทรคุยกันบนหน้าเว็บ</h1>
-    <p class="muted">ตัวอย่างนี้ใช้ <b>WebRTC</b> สำหรับสื่อสารเสียง/วิดีโอแบบ P2P และใช้ <b>Firebase</b> เป็นตัวส่งสัญญาณ (signaling) + แสดงรายชื่อผู้ที่กำลังอยู่บนหน้าเว็บ</p>
+  <h1>📞 โทรคุยทันที</h1>
+  <p>เมื่อเปิดหน้านี้ จะพยายามเชื่อมต่อกับอีกคนที่เปิดหน้านี้เหมือนกันทันที</p>
 
-    <div class="row">
-      <div class="card col">
-        <h3>1) ตั้งค่าเข้าใช้งาน</h3>
-        <label>ชื่อเล่นของคุณ</label>
-        <div class="row" style="align-items:center;gap:8px">
-          <input id="displayName" placeholder="เช่น กานต์ กล้า หรือ seaMuww" />
-          <button id="btnJoin" class="btn">ออนไลน์</button>
-          <span id="meId" class="pill" title="ID ของคุณ (สุ่ม)"></span>
-        </div>
-        <p class="small muted">หลังจากกด "ออนไลน์" ชื่อคุณจะแสดงให้ผู้ใช้หน้าเว็บเดียวกันเห็น และสามารถกดโทรหากันได้</p>
-
-        <details>
-          <summary>🔧 ตั้งค่า Firebase (ครั้งแรก)</summary>
-<pre class="small" style="white-space:pre-wrap;background:#0b1220;border:1px solid #1f2937;padding:10px;border-radius:10px">แก้ไขสคริปต์ด้านล่าง ให้แทนที่ <b>FIREBASE_CONFIG</b> ด้วยค่าจาก Project ของคุณ
-- เปิด Console > Project settings > SDK setup and configuration > Config
-- เปิดใช้ Cloud Firestore และ Realtime Database (โหมดทดสอบในช่วงพัฒนา)
-- เปิดการใช้งานบนโดเมนของคุณใน Authentication (ถ้าเพิ่มภายหลัง) ไม่ได้ใช้ในตัวอย่างนี้</pre>
-        </details>
-      </div>
-
-      <div class="card col">
-        <h3>2) คนออนไลน์</h3>
-        <div id="peers" class="grid"></div>
-        <p class="small muted">จะแสดงเฉพาะคนที่ "ออนไลน์" ภายใน ~60 วิ ที่ผ่านมา</p>
-      </div>
+  <div class="row">
+    <div>
+      <h3>ฉัน</h3>
+      <video id="localVideo" autoplay playsinline muted></video>
     </div>
-
-    <div class="row">
-      <div class="card col">
-        <h3>3) สายที่กำลังติดต่อ</h3>
-        <div id="currentCall" class="incoming" style="padding:10px;border-radius:12px;display:none"></div>
-
-        <div class="video-wrap" style="margin-top:10px">
-          <div>
-            <h4>ฉัน</h4>
-            <video id="localVideo" autoplay playsinline muted></video>
-          </div>
-          <div>
-            <h4>คู่สนทนา</h4>
-            <video id="remoteVideo" autoplay playsinline></video>
-          </div>
-        </div>
-
-        <div class="callbar" style="margin-top:10px">
-          <button id="btnMic" class="ghost">🎙️ ปิด/เปิดไมค์</button>
-          <button id="btnCam" class="ghost">📷 ปิด/เปิดกล้อง</button>
-          <button id="btnHangup" class="danger">วางสาย</button>
-        </div>
-        <p class="small muted">* หากต้องการเสียงเท่านั้น ให้ปิดกล้องก่อนเริ่มสาย หรือปิดระหว่างคุยได้</p>
-      </div>
+    <div>
+      <h3>อีกฝั่ง</h3>
+      <video id="remoteVideo" autoplay playsinline></video>
     </div>
-
   </div>
 
-  <!-- Firebase SDKs -->
+  <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-database-compat.js"></script>
 
   <script>
-  // ==== ใส่ค่า Config ของโปรเจกต์คุณที่นี่ ====
+  // ==== Firebase Config (แทนที่ค่าของคุณเอง) ====
   const firebaseConfig = {
     apiKey: "YOUR_API_KEY",
     authDomain: "YOUR_PROJECT.firebaseapp.com",
     projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId: "YOUR_APP_ID",
-    databaseURL: "https://YOUR_PROJECT-default-rtdb.asia-southeast1.firebasedatabase.app"
   };
-  // ==============================================
-
   firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
-  const rtdb = firebase.database();
 
-  // Collections/paths
-  const peersCol = db.collection('webrtc_peers');
-  const callsCol = db.collection('webrtc_calls');
-
-  // My state
-  const me = {
-    id: Math.random().toString(36).slice(2, 10),
-    name: '',
-    isOnline: false
-  };
-
-  // Presence via RTDB (แม่นกว่า Firestore)
-  const presenceRef = rtdb.ref(`/presence/${me.id}`);
-  const infoConnectedRef = rtdb.ref('.info/connected');
-
-  // UI elems
-  const peersEl = document.getElementById('peers');
-  const btnJoin = document.getElementById('btnJoin');
-  const displayNameEl = document.getElementById('displayName');
-  const meIdEl = document.getElementById('meId');
-  const currentCallEl = document.getElementById('currentCall');
+  const pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] });
   const localVideo = document.getElementById('localVideo');
   const remoteVideo = document.getElementById('remoteVideo');
-  const btnMic = document.getElementById('btnMic');
-  const btnCam = document.getElementById('btnCam');
-  const btnHang = document.getElementById('btnHangup');
 
-  let pc = null;
-  let localStream = null;
-  let remoteStream = null;
-  let activeCallDoc = null;
-  let unsubIncoming = null;
-  let unsubPeers = null;
+  async function init(){
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true, video:true});
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+    localVideo.srcObject = stream;
 
-  const rtcConfig = { iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ] };
-
-  function el(tag, attrs={}, children=[]) {
-    const x = document.createElement(tag);
-    Object.entries(attrs).forEach(([k,v]) => {
-      if (k === 'class') x.className = v; else if (k.startsWith('on')) x.addEventListener(k.slice(2), v); else x.setAttribute(k,v);
-    });
-    children.forEach(c => x.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
-    return x;
-  }
-
-  function renderPeers(list) {
-    peersEl.innerHTML = '';
-    list.filter(p => p.id !== me.id).forEach(p => {
-      const callBtn = el('button', { class:'btn', onclick: () => startCall(p) }, ['โทรหา']);
-      const item = el('div', { class:'item' }, [
-        el('div', {}, [ el('span', { class:'online' }), el('span', { class:'name' }, [p.name || p.id]), el('span',{class:'badge'},[new Date(p.lastActive?.toDate?.() || p.lastActive || Date.now()).toLocaleTimeString()]) ]),
-        callBtn
-      ]);
-      peersEl.appendChild(item);
-    });
-    if (!list.length) peersEl.appendChild(el('div',{class:'muted'},['(ยังไม่มีใครออนไลน์)']));
-  }
-
-  async function joinPresence() {
-    me.name = (displayNameEl.value || '').trim() || `Guest-${me.id}`;
-    meIdEl.textContent = `ID: ${me.id}`;
-    await peersCol.doc(me.id).set({ id: me.id, name: me.name, lastActive: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
-
-    infoConnectedRef.on('value', async snap => {
-      if (snap.val() === true) {
-        const conRef = presenceRef;
-        await conRef.onDisconnect().remove();
-        await conRef.set({ name: me.name, at: firebase.database.ServerValue.TIMESTAMP });
-      }
-    });
-
-    // heartbeat (อัพเดต Firestore ให้คนอื่นเห็น)
-    const tick = async () => {
-      try { await peersCol.doc(me.id).set({ lastActive: firebase.firestore.FieldValue.serverTimestamp(), name: me.name }, { merge: true }); } catch {}
-    };
-    tick();
-    setInterval(tick, 20_000);
-
-    me.isOnline = true;
-    btnJoin.disabled = true;
-
-    // subscribe peers (ภายใน 60 วินาทีล่าสุด)
-    const sixtyAgo = firebase.firestore.Timestamp.fromDate(new Date(Date.now()-60_000));
-    unsubPeers = peersCol.where('lastActive', '>', sixtyAgo).onSnapshot(snap => {
-      const arr = snap.docs.map(d => ({ id:d.id, ...d.data() }))
-        .sort((a,b)=> (b.lastActive?.seconds||0) - (a.lastActive?.seconds||0));
-      renderPeers(arr);
-    });
-
-    // listen incoming calls (call docs ที่ส่งถึงเราและยังไม่มีการตอบรับ)
-    unsubIncoming = callsCol
-      .where('calleeId','==',me.id)
-      .where('status','==','offer')
-      .onSnapshot(snap => {
-        snap.docChanges().forEach(ch => {
-          if (ch.type === 'added') {
-            const data = ch.doc.data();
-            showIncoming(ch.doc, data);
-          }
-        });
-      });
-  }
-
-  function showIncoming(doc, data){
-    currentCallEl.style.display = 'block';
-    currentCallEl.innerHTML = '';
-    const from = data.callerName || data.callerId;
-    currentCallEl.appendChild(el('div',{},[
-      el('div',{},["🔔 มีสายเรียกเข้า จาก ", el('b',{},[from])]),
-      el('div',{class:'muted small'},[`Call ID: ${doc.id}`])
-    ]));
-    const btnAccept = el('button',{class:'btn',onclick:()=>answerCall(doc)},['รับสาย']);
-    const btnDecline = el('button',{class:'ghost',onclick:()=>declineCall(doc)},['ปฏิเสธ']);
-    currentCallEl.appendChild(el('div',{style:'margin-top:8px;display:flex;gap:8px'},[btnAccept, btnDecline]));
-  }
-
-  async function ensureMedia(wantVideo=true){
-    if (localStream) return localStream;
-    localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video: wantVideo });
-    localVideo.srcObject = localStream;
-    return localStream;
-  }
-
-  function newPeerConnection(){
-    pc = new RTCPeerConnection(rtcConfig);
-    remoteStream = new MediaStream();
+    const remoteStream = new MediaStream();
+    pc.ontrack = e => e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
     remoteVideo.srcObject = remoteStream;
-    pc.ontrack = (e)=> e.streams[0].getTracks().forEach(t=> remoteStream.addTrack(t));
-    pc.oniceconnectionstatechange = ()=>{
-      if(['failed','disconnected','closed'].includes(pc.iceConnectionState)){
-        // auto cleanup on drop
-        endCall();
-      }
-    };
-    return pc;
-  }
 
-  async function startCall(peer){
-    await ensureMedia(true);
-    newPeerConnection();
-    localStream.getTracks().forEach(t=> pc.addTrack(t, localStream));
-
-    const callDoc = await callsCol.add({
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      callerId: me.id, callerName: me.name,
-      calleeId: peer.id, calleeName: peer.name,
-      status: 'offer'
-    });
-    activeCallDoc = callDoc;
-
+    const callDoc = db.collection('testCalls').doc('room');
     const offerCandidates = callDoc.collection('offerCandidates');
     const answerCandidates = callDoc.collection('answerCandidates');
 
-    pc.onicecandidate = (event) => { if (event.candidate) offerCandidates.add(event.candidate.toJSON()); };
+    pc.onicecandidate = e => { if(e.candidate) offerCandidates.add(e.candidate.toJSON()); };
 
     const offerDesc = await pc.createOffer();
     await pc.setLocalDescription(offerDesc);
+    await callDoc.set({ offer: { type: offerDesc.type, sdp: offerDesc.sdp } });
 
-    await callDoc.set({ offer: { sdp: offerDesc.sdp, type: offerDesc.type } }, { merge: true });
-
-    // UI
-    currentCallEl.style.display = 'block';
-    currentCallEl.innerHTML = `<b>กำลังโทรหา ${peer.name || peer.id}...</b>`;
-
-    // Remote answer
-    callDoc.onSnapshot(async (snap)=>{
+    callDoc.onSnapshot(async snap => {
       const data = snap.data();
-      if (!pc.currentRemoteDescription && data?.answer) {
-        const answerDesc = new RTCSessionDescription(data.answer);
-        await pc.setRemoteDescription(answerDesc);
-        currentCallEl.innerHTML = `<b>คุยกับ ${peer.name || peer.id}</b>`;
+      if(data?.answer && !pc.currentRemoteDescription){
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
       }
     });
-    // Callee ICE
-    answerCandidates.onSnapshot(snap=>{
-      snap.docChanges().forEach(ch=>{ if(ch.type === 'added'){ pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())); } });
+
+    answerCandidates.onSnapshot(snap => {
+      snap.docChanges().forEach(ch => {
+        if(ch.type === 'added') pc.addIceCandidate(new RTCIceCandidate(ch.doc.data()));
+      });
+    });
+
+    // ถ้าเราเป็นฝั่งที่สอง → สร้าง answer
+    callDoc.get().then(async doc => {
+      const data = doc.data();
+      if(data?.offer && !data.answer){
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const ans = await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        await callDoc.set({ answer:{ type: ans.type, sdp: ans.sdp } }, { merge:true });
+      }
     });
   }
 
-  async function answerCall(callDoc){
-    await ensureMedia(true);
-    newPeerConnection();
-    localStream.getTracks().forEach(t=> pc.addTrack(t, localStream));
-    activeCallDoc = callDoc;
-
-    const offerCandidates = callDoc.collection('offerCandidates');
-    const answerCandidates = callDoc.collection('answerCandidates');
-
-    pc.onicecandidate = (event) => { if (event.candidate) answerCandidates.add(event.candidate.toJSON()); };
-
-    const callData = (await callDoc.get()).data();
-    await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
-
-    const answerDesc = await pc.createAnswer();
-    await pc.setLocalDescription(answerDesc);
-
-    await callDoc.set({ answer: { type: answerDesc.type, sdp: answerDesc.sdp }, status:'connected' }, { merge:true });
-
-    // UI
-    currentCallEl.innerHTML = `<b>คุยกับ ${callData.callerName || callData.callerId}</b>`;
-
-    // Caller ICE
-    offerCandidates.onSnapshot(snap=>{
-      snap.docChanges().forEach(ch=>{ if(ch.type === 'added'){ pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())); } });
-    });
-  }
-
-  async function declineCall(callDoc){
-    await callDoc.ref.set({ status:'declined' }, { merge:true });
-    currentCallEl.style.display = 'none';
-    currentCallEl.innerHTML = '';
-  }
-
-  async function endCall(){
-    try { if (pc) pc.getSenders().forEach(s=>{ try{ s.track && s.track.stop(); }catch{} }); } catch{}
-    try { if (pc) pc.close(); } catch{}
-    pc = null;
-    localStream = null;
-    remoteStream = null;
-    localVideo.srcObject = null;
-    remoteVideo.srcObject = null;
-
-    if (activeCallDoc) {
-      try { await activeCallDoc.set({ status:'ended' }, { merge:true }); } catch{}
-      // Cleanup subcollections (best-effort)
-      try {
-        const oc = await activeCallDoc.collection('offerCandidates').get();
-        oc.forEach(d=>d.ref.delete());
-        const ac = await activeCallDoc.collection('answerCandidates').get();
-        ac.forEach(d=>d.ref.delete());
-      } catch{}
-      activeCallDoc = null;
-    }
-    currentCallEl.style.display = 'none';
-    currentCallEl.innerHTML = '';
-  }
-
-  // Mic/Cam toggles
-  btnMic.addEventListener('click', ()=>{
-    if (!localVideo.srcObject) return;
-    localVideo.srcObject.getAudioTracks().forEach(t=> t.enabled = !t.enabled);
-    btnMic.textContent = '🎙️ ' + (localVideo.srcObject.getAudioTracks().every(t=>t.enabled) ? 'ปิด/เปิดไมค์' : 'ไมค์ปิดอยู่');
-  });
-  btnCam.addEventListener('click', ()=>{
-    if (!localVideo.srcObject) return;
-    localVideo.srcObject.getVideoTracks().forEach(t=> t.enabled = !t.enabled);
-    btnCam.textContent = '📷 ' + (localVideo.srcObject.getVideoTracks().every(t=>t.enabled) ? 'ปิด/เปิดกล้อง' : 'กล้องปิดอยู่');
-  });
-  btnHang.addEventListener('click', endCall);
-
-  btnJoin.addEventListener('click', joinPresence);
-
-  window.addEventListener('beforeunload', ()=>{
-    try { presenceRef.remove(); } catch{}
-  });
+  init();
   </script>
 </body>
 </html>
