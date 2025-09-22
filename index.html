@@ -3,92 +3,206 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>โทรคุยทันที (WebRTC Test)</title>
+  <title>โทรเสียงเท่านั้น (Single‑File WebRTC • No Firebase)</title>
   <style>
-    body { background:#0b1220; color:white; font-family:sans-serif; margin:0; padding:20px; }
-    h1 { color:#8b5cf6; }
-    video { width:45%; background:black; border-radius:12px; margin:5px; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    :root{--bg:#0b1220;--card:#111827;--muted:#9CA3AF;--pri:#8b5cf6;--b:#1f2937}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:#fff;font:16px/1.4 system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:900px;margin:0 auto;padding:16px}
+    h1{color:var(--pri);margin:0 0 8px}
+    .muted{color:var(--muted)}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .card{flex:1 1 300px;background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px}
+    textarea{width:100%;min-height:140px;background:#0d1426;border:1px solid var(--b);color:#e5e7eb;border-radius:10px;padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+    button{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;font-weight:700}
+    .btn{background:var(--pri);color:#fff}
+    .ghost{background:#1f2937;color:#e5e7eb}
+    audio{width:100%}
+    .bar{display:flex;gap:8px;flex-wrap:wrap}
+    .small{font-size:12px}
+    label.small{display:block;margin:8px 0 4px}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   </style>
 </head>
 <body>
-  <h1>📞 โทรคุยทันที</h1>
-  <p>เมื่อเปิดหน้านี้ จะพยายามเชื่อมต่อกับอีกคนที่เปิดหน้านี้เหมือนกันทันที</p>
+  <div class="wrap">
+    <h1>📞 โทรเสียงเท่านั้น (ไม่ใช้เซิร์ฟเวอร์/ไม่ใช้ Firebase)</h1>
+    <p class="muted">ไฟล์เดียว 100% — ใช้ <b>WebRTC</b> + <b>STUN</b> และสัญญาณแบบคัดลอก/วาง (เสียงเท่านั้น ไม่มีวิดีโอ)</p>
 
-  <div class="row">
-    <div>
-      <h3>ฉัน</h3>
-      <video id="localVideo" autoplay playsinline muted></video>
+    <div class="row">
+      <div class="card">
+        <h3>ขั้นตอน</h3>
+        <ol class="small muted">
+          <li>ทั้งสองฝ่ายเปิดหน้านี้</li>
+          <li>คนแรกกด <b>สร้างคำเชิญ (Offer)</b> แล้วคัดลอกข้อความไปให้อีกฝ่าย</li>
+          <li>คนที่สองวางในช่อง <b>คำเชิญ (Offer)</b> แล้วกด <b>สร้างคำตอบ (Answer)</b> จากนั้นคัดลอกคำตอบกลับ</li>
+          <li>คนแรกวาง <b>คำตอบ (Answer)</b> แล้วกด <b>ตั้งค่าคำตอบ</b> → เชื่อมต่อ</li>
+        </ol>
+        <div class="bar" style="margin:10px 0">
+          <button id="btnStart" class="btn">🎧 สร้างคำเชิญ (Offer)</button>
+          <button id="btnMakeAnswer" class="ghost">📨 สร้างคำตอบ (Answer)</button>
+          <button id="btnSetAnswer" class="ghost">✅ ตั้งค่าคำตอบ</button>
+        </div>
+        <p id="status" class="muted small">พร้อม</p>
+      </div>
+
+      <div class="card">
+        <h3>คัดลอก/วาง ข้อความ</h3>
+        <label class="small">คำเชิญ (Offer)</label>
+        <textarea id="offerBox" placeholder="(กดปุ่มเพื่อสร้างคำเชิญ แล้วคัดลอกไปให้อีกฝ่าย)"></textarea>
+        <div class="bar" style="margin:6px 0 12px">
+          <button id="btnCopyOffer" class="ghost">คัดลอกคำเชิญ</button>
+        </div>
+        <label class="small">คำตอบ (Answer)</label>
+        <textarea id="answerBox" placeholder="(ฝั่งที่สองกดปุ่มสร้างคำตอบ แล้วคัดลอกกลับมาวางที่นี่)"></textarea>
+        <div class="bar" style="margin-top:6px">
+          <button id="btnCopyAnswer" class="ghost">คัดลอกคำตอบ</button>
+        </div>
+      </div>
     </div>
-    <div>
-      <h3>อีกฝั่ง</h3>
-      <video id="remoteVideo" autoplay playsinline></video>
+
+    <div class="grid2" style="margin-top:12px">
+      <div class="card">
+        <h3>ไมค์ของฉัน</h3>
+        <p class="small muted">เสียงคุณจะถูกส่งเมื่อเชื่อมต่อแล้ว</p>
+        <div class="bar">
+          <button id="btnMute" class="ghost">🔇 ปิด/เปิดไมค์</button>
+          <button id="btnHang" class="ghost">☎️ วางสาย</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>เสียงอีกฝั่ง</h3>
+        <audio id="remoteAudio" autoplay playsinline controls></audio>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h3>ถ้าไม่เจอกัน / ต่อไม่ติด</h3>
+      <ul class="small muted">
+        <li>ลองสลับเครือข่าย (4G/ไวไฟ) อย่างน้อยหนึ่งฝั่ง — แบบไฟล์เดียวนี้ใช้แค่ STUN; บาง NAT ต้องใช้ TURN จึงจะเชื่อมได้</li>
+        <li>ตรวจสิทธิ์ไมโครโฟนในเบราว์เซอร์ว่าอนุญาตแล้ว</li>
+        <li>รีเฟรชแท็บทั้งสองฝั่ง และทำขั้นตอนใหม่ทั้งหมด</li>
+      </ul>
     </div>
   </div>
 
-  <!-- Firebase -->
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore-compat.js"></script>
-
   <script>
-  // ==== Firebase Config (แทนที่ค่าของคุณเอง) ====
-  const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-  };
-  firebase.initializeApp(firebaseConfig);
-  const db = firebase.firestore();
+    // ====== Single-file WebRTC (Audio only) with Copy/Paste signaling ======
+    let pc;               // RTCPeerConnection
+    let localStream;      // MediaStream (audio only)
+    let remoteStream;     // MediaStream for remote audio
 
-  const pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] });
-  const localVideo = document.getElementById('localVideo');
-  const remoteVideo = document.getElementById('remoteVideo');
+    const $ = (id)=>document.getElementById(id);
+    const statusEl = $('status');
+    const offerBox = $('offerBox');
+    const answerBox = $('answerBox');
+    const remoteAudio = $('remoteAudio');
+    const btnMute = $('btnMute');
+    const btnHang = $('btnHang');
 
-  async function init(){
-    const stream = await navigator.mediaDevices.getUserMedia({audio:true, video:true});
-    stream.getTracks().forEach(t => pc.addTrack(t, stream));
-    localVideo.srcObject = stream;
+    const rtcConfig = { iceServers:[{ urls:'stun:stun.l.google.com:19302' }] };
 
-    const remoteStream = new MediaStream();
-    pc.ontrack = e => e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
-    remoteVideo.srcObject = remoteStream;
+    function setStatus(t){ statusEl.textContent = t; }
 
-    const callDoc = db.collection('testCalls').doc('room');
-    const offerCandidates = callDoc.collection('offerCandidates');
-    const answerCandidates = callDoc.collection('answerCandidates');
+    function newPC(){
+      if (pc) try{ pc.close(); }catch{};
+      pc = new RTCPeerConnection(rtcConfig);
+      pc.oniceconnectionstatechange = ()=> setStatus('ICE: '+pc.iceConnectionState);
+      pc.onconnectionstatechange = ()=> setStatus('Peer: '+pc.connectionState);
+      pc.ontrack = (ev)=>{
+        if (!remoteStream) remoteStream = new MediaStream();
+        ev.streams[0].getTracks().forEach(tr=> remoteStream.addTrack(tr));
+        remoteAudio.srcObject = remoteStream;
+      };
+      return pc;
+    }
 
-    pc.onicecandidate = e => { if(e.candidate) offerCandidates.add(e.candidate.toJSON()); };
+    async function ensureMic(){
+      if (localStream) return localStream;
+      localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+      return localStream;
+    }
 
-    const offerDesc = await pc.createOffer();
-    await pc.setLocalDescription(offerDesc);
-    await callDoc.set({ offer: { type: offerDesc.type, sdp: offerDesc.sdp } });
-
-    callDoc.onSnapshot(async snap => {
-      const data = snap.data();
-      if(data?.answer && !pc.currentRemoteDescription){
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      }
-    });
-
-    answerCandidates.onSnapshot(snap => {
-      snap.docChanges().forEach(ch => {
-        if(ch.type === 'added') pc.addIceCandidate(new RTCIceCandidate(ch.doc.data()));
+    // Wait until ICE gathering completes (non-trickle for easy copy/paste)
+    function waitIceGatheringComplete(){
+      return new Promise((resolve)=>{
+        if (pc.iceGatheringState === 'complete') return resolve();
+        const onchg = ()=>{ if (pc.iceGatheringState === 'complete'){ pc.removeEventListener('icegatheringstatechange', onchg); resolve(); } };
+        pc.addEventListener('icegatheringstatechange', onchg);
       });
+    }
+
+    function encode(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); }
+    function decode(txt){ return JSON.parse(decodeURIComponent(escape(atob(txt)))); }
+
+    // Buttons
+    $('btnStart').addEventListener('click', async ()=>{
+      try{
+        setStatus('ขอสิทธิ์ไมค์…');
+        await ensureMic();
+        newPC();
+        // add local audio tracks
+        localStream.getTracks().forEach(t=> pc.addTrack(t, localStream));
+
+        setStatus('สร้างคำเชิญ…');
+        const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:false });
+        await pc.setLocalDescription(offer);
+        await waitIceGatheringComplete();
+        offerBox.value = encode({ sdp: pc.localDescription.sdp, type: pc.localDescription.type });
+        setStatus('คัดลอกคำเชิญแล้วส่งให้อีกฝั่ง');
+      }catch(e){ setStatus('Error: '+e.message); console.error(e); }
     });
 
-    // ถ้าเราเป็นฝั่งที่สอง → สร้าง answer
-    callDoc.get().then(async doc => {
-      const data = doc.data();
-      if(data?.offer && !data.answer){
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        const ans = await pc.createAnswer();
-        await pc.setLocalDescription(ans);
-        await callDoc.set({ answer:{ type: ans.type, sdp: ans.sdp } }, { merge:true });
-      }
+    $('btnCopyOffer').addEventListener('click', async ()=>{
+      await navigator.clipboard.writeText(offerBox.value||'');
+      setStatus('คัดลอกคำเชิญแล้ว');
     });
-  }
 
-  init();
+    $('btnMakeAnswer').addEventListener('click', async ()=>{
+      try{
+        const raw = (offerBox.value||'').trim();
+        if (!raw) return setStatus('วางคำเชิญ (Offer) ก่อน');
+        setStatus('เตรียมตอบรับ…');
+        await ensureMic();
+        newPC();
+        localStream.getTracks().forEach(t=> pc.addTrack(t, localStream));
+
+        const remoteOffer = decode(raw);
+        await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await waitIceGatheringComplete();
+        answerBox.value = encode({ sdp: pc.localDescription.sdp, type: pc.localDescription.type });
+        setStatus('ส่งคำตอบกลับให้ฝ่ายที่เชิญ');
+      }catch(e){ setStatus('Error: '+e.message); console.error(e); }
+    });
+
+    $('btnCopyAnswer').addEventListener('click', async ()=>{
+      await navigator.clipboard.writeText(answerBox.value||'');
+      setStatus('คัดลอกคำตอบแล้ว');
+    });
+
+    $('btnSetAnswer').addEventListener('click', async ()=>{
+      try{
+        const raw = (answerBox.value||'').trim();
+        if (!raw) return setStatus('วางคำตอบ (Answer) ก่อน');
+        const remoteAnswer = decode(raw);
+        await pc.setRemoteDescription(new RTCSessionDescription(remoteAnswer));
+        setStatus('ตั้งค่าคำตอบแล้ว รอเชื่อมต่อ…');
+      }catch(e){ setStatus('Error: '+e.message); console.error(e); }
+    });
+
+    btnMute.addEventListener('click', ()=>{
+      if (!localStream) return;
+      localStream.getAudioTracks().forEach(t=> t.enabled = !t.enabled);
+      setStatus(localStream.getAudioTracks().every(t=>t.enabled) ? 'ไมค์เปิด' : 'ไมค์ปิด');
+    });
+
+    btnHang.addEventListener('click', ()=>{
+      try { pc && pc.getSenders().forEach(s=> s.track && s.track.stop()); } catch{}
+      try { pc && pc.close(); } catch{}
+      pc = null; remoteStream = null; setStatus('วางสายแล้ว');
+    });
   </script>
 </body>
 </html>
