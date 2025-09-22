@@ -1,208 +1,324 @@
-<!DOCTYPE html>
+<!--
+Auto‑Mesh Voice Chat
+- Client: Single HTML page (audio‑only) that auto‑connects everyone in the same room.
+- Signaling: Minimal WebSocket broadcast server (provided below for Node.js or Cloudflare Workers).
+
+How it works
+1) Open the client page on multiple devices/browsers with the SAME ?room=xxxx (defaults to "lobby").
+2) Each client joins the room over WebSocket, auto‑calls everyone else (full mesh), and auto‑answers incoming.
+3) Audio‑only. No Firebase. TURN optional (recommended for tougher NATs).
+
+Limits
+- Full mesh works best for ~2–4 people. For larger groups, use an SFU.
+-->
+<!doctype html>
 <html lang="th">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>โทรเสียงเท่านั้น (Single‑File WebRTC • No Firebase)</title>
+  <title>Auto‑Mesh Voice Chat (WebRTC + WS signaling)</title>
   <style>
-    :root{--bg:#0b1220;--card:#111827;--muted:#9CA3AF;--pri:#8b5cf6;--b:#1f2937}
+    :root{--bg:#0b1220;--card:#111827;--muted:#9CA3AF;--b:#1f2937;--pri:#8b5cf6}
     *{box-sizing:border-box}
     body{margin:0;background:var(--bg);color:#fff;font:16px/1.4 system-ui,Segoe UI,Roboto,Arial}
-    .wrap{max-width:900px;margin:0 auto;padding:16px}
-    h1{color:var(--pri);margin:0 0 8px}
+    .wrap{max-width:920px;margin:0 auto;padding:16px}
+    h1{margin:0 0 6px;color:var(--pri)}
     .muted{color:var(--muted)}
-    .row{display:flex;gap:12px;flex-wrap:wrap}
-    .card{flex:1 1 300px;background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px}
-    textarea{width:100%;min-height:140px;background:#0d1426;border:1px solid var(--b);color:#e5e7eb;border-radius:10px;padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
-    button{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;font-weight:700}
+    .card{background:var(--card);border:1px solid var(--b);border-radius:14px;padding:14px;margin-top:12px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    code{background:#0b1220;border:1px solid var(--b);padding:2px 6px;border-radius:6px}
+    button{cursor:pointer;border:0;border-radius:10px;padding:8px 12px;font-weight:700}
     .btn{background:var(--pri);color:#fff}
-    .ghost{background:#1f2937;color:#e5e7eb}
     audio{width:100%}
-    .bar{display:flex;gap:8px;flex-wrap:wrap}
-    .small{font-size:12px}
-    label.small{display:block;margin:8px 0 4px}
-    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .pill{font-size:12px;border:1px solid #2a385c;background:#0e1730;padding:2px 8px;border-radius:999px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>📞 โทรเสียงเท่านั้น (ไม่ใช้เซิร์ฟเวอร์/ไม่ใช้ Firebase)</h1>
-    <p class="muted">ไฟล์เดียว 100% — ใช้ <b>WebRTC</b> + <b>STUN</b> และสัญญาณแบบคัดลอก/วาง (เสียงเท่านั้น ไม่มีวิดีโอ)</p>
+    <h1>📞 Auto‑Mesh Voice Chat</h1>
+    <p class="muted">เปิดหน้าเดียวกันพร้อมกันในห้องเดียวกัน ทุกคนจะเชื่อมต่อเสียงถึงกันอัตโนมัติ (ไม่ใช้ Firebase). ต้องมี <b>WebSocket signaling</b> เล็กๆ หนึ่งจุด (มีตัวอย่างให้ด้านล่าง).</p>
 
-    <div class="row">
-      <div class="card">
-        <h3>ขั้นตอน</h3>
-        <ol class="small muted">
-          <li>ทั้งสองฝ่ายเปิดหน้านี้</li>
-          <li>คนแรกกด <b>สร้างคำเชิญ (Offer)</b> แล้วคัดลอกข้อความไปให้อีกฝ่าย</li>
-          <li>คนที่สองวางในช่อง <b>คำเชิญ (Offer)</b> แล้วกด <b>สร้างคำตอบ (Answer)</b> จากนั้นคัดลอกคำตอบกลับ</li>
-          <li>คนแรกวาง <b>คำตอบ (Answer)</b> แล้วกด <b>ตั้งค่าคำตอบ</b> → เชื่อมต่อ</li>
-        </ol>
-        <div class="bar" style="margin:10px 0">
-          <button id="btnStart" class="btn">🎧 สร้างคำเชิญ (Offer)</button>
-          <button id="btnMakeAnswer" class="ghost">📨 สร้างคำตอบ (Answer)</button>
-          <button id="btnSetAnswer" class="ghost">✅ ตั้งค่าคำตอบ</button>
-        </div>
-        <p id="status" class="muted small">พร้อม</p>
+    <div class="card">
+      <div class="row">
+        <div>Room:</div>
+        <code id="room"></code>
+        <div class="pill" id="myid"></div>
+        <button id="btnMute" class="">🔇 ปิด/เปิดไมค์</button>
       </div>
-
-      <div class="card">
-        <h3>คัดลอก/วาง ข้อความ</h3>
-        <label class="small">คำเชิญ (Offer)</label>
-        <textarea id="offerBox" placeholder="(กดปุ่มเพื่อสร้างคำเชิญ แล้วคัดลอกไปให้อีกฝ่าย)"></textarea>
-        <div class="bar" style="margin:6px 0 12px">
-          <button id="btnCopyOffer" class="ghost">คัดลอกคำเชิญ</button>
-        </div>
-        <label class="small">คำตอบ (Answer)</label>
-        <textarea id="answerBox" placeholder="(ฝั่งที่สองกดปุ่มสร้างคำตอบ แล้วคัดลอกกลับมาวางที่นี่)"></textarea>
-        <div class="bar" style="margin-top:6px">
-          <button id="btnCopyAnswer" class="ghost">คัดลอกคำตอบ</button>
-        </div>
-      </div>
+      <div id="status" class="muted" style="margin-top:8px">เตรียมพร้อม…</div>
     </div>
 
-    <div class="grid2" style="margin-top:12px">
-      <div class="card">
-        <h3>ไมค์ของฉัน</h3>
-        <p class="small muted">เสียงคุณจะถูกส่งเมื่อเชื่อมต่อแล้ว</p>
-        <div class="bar">
-          <button id="btnMute" class="ghost">🔇 ปิด/เปิดไมค์</button>
-          <button id="btnHang" class="ghost">☎️ วางสาย</button>
-        </div>
-      </div>
-      <div class="card">
-        <h3>เสียงอีกฝั่ง</h3>
-        <audio id="remoteAudio" autoplay playsinline controls></audio>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:12px">
-      <h3>ถ้าไม่เจอกัน / ต่อไม่ติด</h3>
-      <ul class="small muted">
-        <li>ลองสลับเครือข่าย (4G/ไวไฟ) อย่างน้อยหนึ่งฝั่ง — แบบไฟล์เดียวนี้ใช้แค่ STUN; บาง NAT ต้องใช้ TURN จึงจะเชื่อมได้</li>
-        <li>ตรวจสิทธิ์ไมโครโฟนในเบราว์เซอร์ว่าอนุญาตแล้ว</li>
-        <li>รีเฟรชแท็บทั้งสองฝั่ง และทำขั้นตอนใหม่ทั้งหมด</li>
-      </ul>
+    <div class="card">
+      <h3>เสียงจากเพื่อนร่วมห้อง</h3>
+      <div id="peers" class="grid"></div>
+      <p class="muted" style="margin-top:8px">เข้ม NAT มากๆ อาจต้องใช้ TURN. เติมในตัวแปร <code>ICE_SERVERS</code> ด้านล่าง</p>
     </div>
   </div>
 
-  <script>
-    // ====== Single-file WebRTC (Audio only) with Copy/Paste signaling ======
-    let pc;               // RTCPeerConnection
-    let localStream;      // MediaStream (audio only)
-    let remoteStream;     // MediaStream for remote audio
+<script>
+// ====== Config ======
+const SIGNAL_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+// If your signaling runs elsewhere, set e.g. 'wss://your-domain.example/ws'
 
-    const $ = (id)=>document.getElementById(id);
-    const statusEl = $('status');
-    const offerBox = $('offerBox');
-    const answerBox = $('answerBox');
-    const remoteAudio = $('remoteAudio');
-    const btnMute = $('btnMute');
-    const btnHang = $('btnHang');
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  // Optional TURN example:
+  // { urls:'turn:YOUR_TURN_HOST:3478', username:'user', credential:'pass' }
+];
 
-    const rtcConfig = { iceServers:[{ urls:'stun:stun.l.google.com:19302' }] };
+// ====== Helpers ======
+const params = new URLSearchParams(location.search);
+const ROOM = params.get('room') || 'lobby';
+const MY_ID = Math.random().toString(36).slice(2,10);
+const log = (...a)=>{ console.log('[client]', ...a); };
+const $ = (id)=>document.getElementById(id);
+$('room').textContent = ROOM;
+$('myid').textContent = 'ID: '+MY_ID;
 
-    function setStatus(t){ statusEl.textContent = t; }
+function setStatus(t){ $('status').textContent = t; }
 
-    function newPC(){
-      if (pc) try{ pc.close(); }catch{};
-      pc = new RTCPeerConnection(rtcConfig);
-      pc.oniceconnectionstatechange = ()=> setStatus('ICE: '+pc.iceConnectionState);
-      pc.onconnectionstatechange = ()=> setStatus('Peer: '+pc.connectionState);
-      pc.ontrack = (ev)=>{
-        if (!remoteStream) remoteStream = new MediaStream();
-        ev.streams[0].getTracks().forEach(tr=> remoteStream.addTrack(tr));
-        remoteAudio.srcObject = remoteStream;
-      };
-      return pc;
+// ====== Signaling (WebSocket) protocol ======
+// Messages: {type, room, from, to?, payload}
+// types: 'join', 'peers', 'offer', 'answer', 'ice', 'leave'
+let ws;
+function wsSend(msg){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+
+// ====== WebRTC state ======
+let localStream;
+const pcs = new Map(); // peerId -> RTCPeerConnection
+const senders = new Map(); // peerId -> RTCRtpSender[]
+
+function createPeer(peerId){
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  pcs.set(peerId, pc);
+
+  pc.onicecandidate = (ev)=>{
+    if (ev.candidate) wsSend({ type:'ice', room:ROOM, from:MY_ID, to:peerId, payload:ev.candidate });
+  };
+  pc.oniceconnectionstatechange = ()=>{
+    log(peerId, 'ice:', pc.iceConnectionState);
+    if (['failed','disconnected','closed'].includes(pc.iceConnectionState)) removePeerEl(peerId);
+  };
+  pc.ontrack = (ev)=>{
+    attachRemoteAudio(peerId, ev.streams[0]);
+  };
+  return pc;
+}
+
+function attachRemoteAudio(peerId, stream){
+  let el = document.getElementById('aud_'+peerId);
+  if (!el){
+    const wrap = document.createElement('div');
+    wrap.id = 'wrap_'+peerId; wrap.className = 'card';
+    const title = document.createElement('div');
+    title.textContent = 'Peer '+peerId;
+    const audio = document.createElement('audio');
+    audio.id = 'aud_'+peerId; audio.autoplay = true; audio.playsInline = true; audio.controls = true;
+    wrap.appendChild(title); wrap.appendChild(audio);
+    $('peers').appendChild(wrap);
+    el = audio;
+  }
+  el.srcObject = stream;
+}
+
+function removePeerEl(peerId){
+  const wrap = document.getElementById('wrap_'+peerId);
+  if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+}
+
+async function ensureMic(){
+  if (localStream) return localStream;
+  localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+  return localStream;
+}
+
+async function callPeer(peerId){
+  const pc = pcs.get(peerId) || createPeer(peerId);
+  const stream = await ensureMic();
+  const sArr = [];
+  stream.getTracks().forEach(t=> sArr.push(pc.addTrack(t, stream)));
+  senders.set(peerId, sArr);
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  wsSend({ type:'offer', room:ROOM, from:MY_ID, to:peerId, payload:offer });
+}
+
+async function handleOffer(from, offer){
+  const pc = pcs.get(from) || createPeer(from);
+  const stream = await ensureMic();
+  const sArr = [];
+  stream.getTracks().forEach(t=> sArr.push(pc.addTrack(t, stream)));
+  senders.set(from, sArr);
+
+  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  wsSend({ type:'answer', room:ROOM, from:MY_ID, to:from, payload:answer });
+}
+
+async function handleAnswer(from, answer){
+  const pc = pcs.get(from) || createPeer(from);
+  await pc.setRemoteDescription(new RTCSessionDescription(answer));
+}
+
+function handleIce(from, cand){
+  const pc = pcs.get(from) || createPeer(from);
+  try { pc.addIceCandidate(new RTCIceCandidate(cand)); } catch (e){ log('ICE add error', e); }
+}
+
+function cleanup(){
+  pcs.forEach((pc, id)=>{ try{ pc.getSenders().forEach(s=> s.track && s.track.stop()); }catch{} try{ pc.close(); }catch{} });
+  pcs.clear(); senders.clear();
+}
+
+// UI controls
+$('btnMute').addEventListener('click', ()=>{
+  if (!localStream) return;
+  localStream.getAudioTracks().forEach(t=> t.enabled = !t.enabled);
+  setStatus(localStream.getAudioTracks().every(t=>t.enabled)? 'ไมค์เปิด' : 'ไมค์ปิด');
+});
+
+// Start
+(async function main(){
+  setStatus('เชื่อมต่อเซิร์ฟเวอร์สัญญาณ…');
+  try { await ensureMic(); } catch(e){ setStatus('ต้องอนุญาตไมค์ก่อนใช้งาน'); return; }
+
+  ws = new WebSocket(SIGNAL_URL);
+  ws.onopen = ()=>{
+    setStatus('เข้าห้อง '+ROOM+' แล้ว');
+    wsSend({ type:'join', room:ROOM, from:MY_ID });
+  };
+  ws.onmessage = async (ev)=>{
+    const msg = JSON.parse(ev.data||'{}');
+    if (msg.room !== ROOM) return;
+    if (msg.from === MY_ID) return; // ignore own
+
+    switch(msg.type){
+      case 'peers':{
+        // server sends current peer list (excluding me). Auto-call all.
+        (msg.payload||[]).forEach(pid=>{ if (pid !== MY_ID) callPeer(pid); });
+        break;
+      }
+      case 'join':{
+        // someone new joined → I call them (to avoid double offer, simple rule: everyone calls newcomers)
+        callPeer(msg.from);
+        break;
+      }
+      case 'offer':{
+        if (msg.to === MY_ID) handleOffer(msg.from, msg.payload);
+        break;
+      }
+      case 'answer':{
+        if (msg.to === MY_ID) handleAnswer(msg.from, msg.payload);
+        break;
+      }
+      case 'ice':{
+        if (msg.to === MY_ID) handleIce(msg.from, msg.payload);
+        break;
+      }
+      case 'leave':{
+        removePeerEl(msg.from);
+        const pc = pcs.get(msg.from); if (pc){ try{ pc.close(); }catch{} pcs.delete(msg.from); }
+        break;
+      }
     }
-
-    async function ensureMic(){
-      if (localStream) return localStream;
-      localStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-      return localStream;
-    }
-
-    // Wait until ICE gathering completes (non-trickle for easy copy/paste)
-    function waitIceGatheringComplete(){
-      return new Promise((resolve)=>{
-        if (pc.iceGatheringState === 'complete') return resolve();
-        const onchg = ()=>{ if (pc.iceGatheringState === 'complete'){ pc.removeEventListener('icegatheringstatechange', onchg); resolve(); } };
-        pc.addEventListener('icegatheringstatechange', onchg);
-      });
-    }
-
-    function encode(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))); }
-    function decode(txt){ return JSON.parse(decodeURIComponent(escape(atob(txt)))); }
-
-    // Buttons
-    $('btnStart').addEventListener('click', async ()=>{
-      try{
-        setStatus('ขอสิทธิ์ไมค์…');
-        await ensureMic();
-        newPC();
-        // add local audio tracks
-        localStream.getTracks().forEach(t=> pc.addTrack(t, localStream));
-
-        setStatus('สร้างคำเชิญ…');
-        const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:false });
-        await pc.setLocalDescription(offer);
-        await waitIceGatheringComplete();
-        offerBox.value = encode({ sdp: pc.localDescription.sdp, type: pc.localDescription.type });
-        setStatus('คัดลอกคำเชิญแล้วส่งให้อีกฝั่ง');
-      }catch(e){ setStatus('Error: '+e.message); console.error(e); }
-    });
-
-    $('btnCopyOffer').addEventListener('click', async ()=>{
-      await navigator.clipboard.writeText(offerBox.value||'');
-      setStatus('คัดลอกคำเชิญแล้ว');
-    });
-
-    $('btnMakeAnswer').addEventListener('click', async ()=>{
-      try{
-        const raw = (offerBox.value||'').trim();
-        if (!raw) return setStatus('วางคำเชิญ (Offer) ก่อน');
-        setStatus('เตรียมตอบรับ…');
-        await ensureMic();
-        newPC();
-        localStream.getTracks().forEach(t=> pc.addTrack(t, localStream));
-
-        const remoteOffer = decode(raw);
-        await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        await waitIceGatheringComplete();
-        answerBox.value = encode({ sdp: pc.localDescription.sdp, type: pc.localDescription.type });
-        setStatus('ส่งคำตอบกลับให้ฝ่ายที่เชิญ');
-      }catch(e){ setStatus('Error: '+e.message); console.error(e); }
-    });
-
-    $('btnCopyAnswer').addEventListener('click', async ()=>{
-      await navigator.clipboard.writeText(answerBox.value||'');
-      setStatus('คัดลอกคำตอบแล้ว');
-    });
-
-    $('btnSetAnswer').addEventListener('click', async ()=>{
-      try{
-        const raw = (answerBox.value||'').trim();
-        if (!raw) return setStatus('วางคำตอบ (Answer) ก่อน');
-        const remoteAnswer = decode(raw);
-        await pc.setRemoteDescription(new RTCSessionDescription(remoteAnswer));
-        setStatus('ตั้งค่าคำตอบแล้ว รอเชื่อมต่อ…');
-      }catch(e){ setStatus('Error: '+e.message); console.error(e); }
-    });
-
-    btnMute.addEventListener('click', ()=>{
-      if (!localStream) return;
-      localStream.getAudioTracks().forEach(t=> t.enabled = !t.enabled);
-      setStatus(localStream.getAudioTracks().every(t=>t.enabled) ? 'ไมค์เปิด' : 'ไมค์ปิด');
-    });
-
-    btnHang.addEventListener('click', ()=>{
-      try { pc && pc.getSenders().forEach(s=> s.track && s.track.stop()); } catch{}
-      try { pc && pc.close(); } catch{}
-      pc = null; remoteStream = null; setStatus('วางสายแล้ว');
-    });
-  </script>
+  };
+  ws.onclose = ()=>{ setStatus('สัญญาณตัดการเชื่อมต่อ'); cleanup(); };
+  window.addEventListener('beforeunload', ()=>{ try{ wsSend({type:'leave', room:ROOM, from:MY_ID}); }catch{} });
+})();
+</script>
 </body>
 </html>
+
+<!-- ================== Tiny Signaling Server (Option A: Node.js) ==================
+Save as server.js, install deps, run:
+  npm i ws express
+  node server.js
+Then host the above HTML and proxy /ws to this server (or serve it together).
+
+const express = require('express');
+const { WebSocketServer } = require('ws');
+const app = express();
+const httpServer = app.listen(process.env.PORT || 3000, ()=>console.log('HTTP on', httpServer.address().port));
+const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+const rooms = new Map(); // room -> Set(ws)
+function listIds(room){ return Array.from(rooms.get(room)||[]).map(c=>c.id); }
+
+wss.on('connection', (ws, req)=>{
+  ws.id = Math.random().toString(36).slice(2,10);
+  ws.room = null;
+  ws.on('message', (buf)=>{
+    let msg = {}; try{ msg = JSON.parse(buf.toString()); }catch{}
+    const { type, room, from, to, payload } = msg;
+    if (type === 'join'){
+      ws.id = from || ws.id; ws.room = room;
+      if (!rooms.has(room)) rooms.set(room, new Set());
+      rooms.get(room).add(ws);
+      // send current peers
+      const peers = listIds(room).filter(id=> id !== ws.id);
+      ws.send(JSON.stringify({ type:'peers', room, from:'server', payload:peers }));
+      // notify others that this peer joined
+      rooms.get(room).forEach(c=>{ if (c !== ws) c.send(JSON.stringify({ type:'join', room, from: ws.id })); });
+      return;
+    }
+    if (!ws.room) return;
+    // relay targeted messages within room
+    if (['offer','answer','ice','leave'].includes(type)){
+      rooms.get(ws.room)?.forEach(c=>{
+        if (!to || c.id === to){ c.send(JSON.stringify({ type, room: ws.room, from, to, payload })); }
+      });
+    }
+  });
+  ws.on('close', ()=>{
+    const set = rooms.get(ws.room); if (set){ set.delete(ws); set.forEach(c=> c.send(JSON.stringify({ type:'leave', room: ws.room, from: ws.id }))); if (!set.size) rooms.delete(ws.room); }
+  });
+});
+
+// ============================================================================= -->
+
+<!-- ================== Tiny Signaling Server (Option B: Cloudflare Workers) ==================
+// Deploy as a Worker; bind a Durable Object named "Hub" as HUB. Then map route /ws to this Worker.
+export default {
+  fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === '/ws') return env.HUB.fetch(request);
+    return new Response('OK', { status: 200 });
+  }
+}
+
+export class Hub {
+  constructor(state, env){ this.state = state; this.env = env; this.conns = new Map(); }
+  async fetch(request){
+    if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 400 });
+    const [client, server] = Object.values(new WebSocketPair());
+    const id = Math.random().toString(36).slice(2,10);
+    this.state.acceptWebSocket(server, [id]);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+  webSocketMessage(ws, msg){
+    let data={}; try{ data = JSON.parse(msg); }catch{}
+    const { type, room, from, to } = data;
+    if (type === 'join'){
+      ws.id = from; ws.room = room;
+      if (!this.rooms) this.rooms = new Map();
+      if (!this.rooms.has(room)) this.rooms.set(room, new Set());
+      this.rooms.get(room).add(ws);
+      const peers = Array.from(this.rooms.get(room)).map(c=>c.id).filter(id=>id!==ws.id);
+      ws.send(JSON.stringify({ type:'peers', room, from:'server', payload:peers }));
+      this.rooms.get(room).forEach(c=>{ if (c!==ws) c.send(JSON.stringify({ type:'join', room, from: ws.id })); });
+      return;
+    }
+    if (!ws.room) return;
+    if (['offer','answer','ice','leave'].includes(type)){
+      this.rooms.get(ws.room)?.forEach(c=>{ if (!to || c.id === to) c.send(JSON.stringify({ ...data })); });
+    }
+  }
+  webSocketClose(ws){
+    if (!this.rooms) return;
+    const set = this.rooms.get(ws.room); if (set){ set.delete(ws); set.forEach(c=> c.send(JSON.stringify({ type:'leave', room: ws.room, from: ws.id }))); if (!set.size) this.rooms.delete(ws.room); }
+  }
+}
+// ============================================================================= -->
