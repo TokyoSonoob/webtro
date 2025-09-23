@@ -1,10 +1,15 @@
-﻿{
-  "name": "webrtc-sixdigit-vercel",
+{
+  "name": "server",
   "version": "1.0.0",
-  "private": true,
-  "license": "MIT",
-  "engines": { "node": ">=18" },
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "firebase-admin": "^12.5.0"
+    "firebase-admin": "^13.5.0"
   }
 }
