@@ -1,13 +1,13 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="th">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>โทรด้วยรหัส 6 หลัก (ไฟล์เดียว)</title>
+  <title>โทรด้วยรหัส 6 หลัก (Vercel + Firebase Admin)</title>
   <style>
     :root{ --bg:#0b1220; --panel:#0f172a; --soft:#111827; --text:#e5e7eb; --muted:#9ca3af; --accent:#8b5cf6; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
     *{box-sizing:border-box} html,body{height:100%}
-    body{margin:0;background:linear-gradient(160deg,#0b1220 0,#0e1530 45%,#0b1220 100%);color:var(--text);
+    body{margin:0;background:linear-gradient(160deg,#0b1220,#0e1530 45%,#0b1220);color:var(--text);
       font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Thai","Noto Sans",Arial,"Apple Color Emoji","Segoe UI Emoji";
       display:flex;align-items:center;justify-content:center;padding:18px}
     .app{width:min(1100px,100%);background:rgba(15,23,42,.85);backdrop-filter:blur(8px);border:1px solid #1f2937;border-radius:20px;
@@ -60,7 +60,7 @@
           <input id="joinCode" class="input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="กรอกรหัส 6 หลัก" />
           <button id="joinBtn" class="btn">เข้าห้อง</button>
         </div>
-        <p class="hint" style="margin:10px 0 0">* ห้องรองรับ 2 คน (P2P). ถ้ามีผู้เข้าครบแล้วจะเข้าร่วมไม่ได้</p>
+        <p class="hint" style="margin:10px 0 0">* ห้องรองรับ 2 คน (P2P)</p>
       </section>
 
       <section class="card">
@@ -77,51 +77,25 @@
     </div>
   </div>
 
-  <!-- Firebase & WebRTC -->
-  <script type="module">
-    // 👉👉 ใส่ค่า Firebase Web Config ของคุณที่นี่ (ค่าพวกนี้เปิดเผยได้ตามปกติของ Firebase Web):
-    const firebaseConfig = {
-      apiKey: "YOUR_API_KEY",
-      authDomain: "YOUR_PROJECT.firebaseapp.com",
-      projectId: "YOUR_PROJECT_ID",
-      appId: "YOUR_APP_ID",
-    };
-
-    // Firebase CDN (modular)
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import {
-      initializeFirestore, runTransaction,
-      doc, setDoc, getDoc, collection, addDoc, onSnapshot,
-      serverTimestamp, getDocs, deleteDoc, query, orderBy, where
-    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-
-    // UI helpers
+  <script>
     const $ = s => document.querySelector(s);
     const $status = $('#status'), $create = $('#createBtn'), $codeBox = $('#codeBox'), $roomCode = $('#roomCode'),
           $copy = $('#copyBtn'), $joinCode = $('#joinCode'), $join = $('#joinBtn'),
           $mic = $('#micBtn'), $cam = $('#camBtn'), $hang = $('#hangBtn'),
           localVideo = $('#localVideo'), remoteVideo = $('#remoteVideo');
-
     const setStatus = (t, cls='') => { $status.textContent = t; $status.className = 'pill ' + cls; };
-    const spaceCode = c => c.split('').join(' ');
+    const space = c => c.split('').join(' ');
 
-    // Init app
-    const app = initializeApp(firebaseConfig);
-    // ใช้ long-polling อัตโนมัติ (ช่วยเคสเครือข่ายบล็อก WebChannel/HTTP2)
-    const db  = initializeFirestore(app, { experimentalAutoDetectLongPolling: true, useFetchStreams: false });
-    const auth = getAuth(app);
+    async function api(path, { method='GET', body=null } = {}) {
+      const opt = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opt.body = JSON.stringify(body);
+      const res = await fetch(path, opt);
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || `HTTP ${res.status}`);
+      return res.json();
+    }
 
-    onAuthStateChanged(auth, async (u) => {
-      if (!u) await signInAnonymously(auth);
-    });
-
-    // WebRTC
     const pcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], iceCandidatePoolSize: 10 };
-    let pc = null, localStream = null, remoteStream = null;
-    let role = null;          // 'caller' | 'callee'
-    let roomRef = null, roomCode = '';
-    let unsubRoom = null, unsubOtherCands = null;
+    let pc=null, localStream=null, remoteStream=null, role=null, code='', poll=null, lastMs=0;
 
     async function getMedia(){
       if (localStream) return localStream;
@@ -135,151 +109,100 @@
       pc.ontrack = e => e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
-        if (s === 'connected') setStatus('เชื่อมต่อแล้ว', 'ok');
-        else if (s === 'connecting') setStatus('กำลังเชื่อมต่อ…', 'warn');
-        else if (s === 'disconnected' || s === 'failed') setStatus('สัญญาณขาดการเชื่อมต่อ', 'err');
+        if      (s === 'connected')    setStatus('เชื่อมต่อแล้ว','ok');
+        else if (s === 'connecting')   setStatus('กำลังเชื่อมต่อ…','warn');
+        else if (s === 'failed' || s === 'disconnected') setStatus('สัญญาณขาดการเชื่อมต่อ','err');
       };
       return pc;
     }
-    function sanitizeCode(code){ return (code||'').replace(/\D/g,'').slice(0,6); }
-
-    async function allocateCodeTx(){
-      // สุ่มรหัส แล้วจองด้วย transaction กันชนกัน
-      for (let i=0;i<8;i++){
-        const code = String(Math.floor(Math.random()*1e6)).padStart(6,'0');
-        const ref = doc(db, 'calls', code);
-        try{
-          await runTransaction(db, async (t)=>{
-            const snap = await t.get(ref);
-            if (snap.exists()) throw new Error('taken');
-            t.set(ref, { createdAt: serverTimestamp(), state:'waiting' });
-          });
-          return { code, ref };
-        }catch(e){ /* taken → ลองใหม่ */ }
-      }
-      throw new Error('ไม่สามารถสร้างรหัสได้ ลองใหม่อีกครั้ง');
+    function startPolling(){
+      stopPolling(); lastMs = 0;
+      poll = setInterval(async () => {
+        try {
+          if (role === 'caller') {
+            const st = await api(`/api/room/state?code=${code}`);
+            if (st.answer && !pc.currentRemoteDescription) {
+              await pc.setRemoteDescription(new RTCSessionDescription(st.answer));
+              setStatus('กำลังเชื่อมต่อ…','warn');
+            }
+          }
+          const res = await api(`/api/room/candidates?code=${code}&role=${role}&after=${lastMs}`);
+          if (Array.isArray(res.items)) {
+            for (const it of res.items) {
+              lastMs = Math.max(lastMs, Number(it.createdAtMs || 0));
+              try { await pc.addIceCandidate(it.candidate); } catch {}
+            }
+          }
+        } catch {}
+      }, 1200);
     }
+    function stopPolling(){ if (poll) { clearInterval(poll); poll=null; } }
 
-    async function createRoomFlow(){
+    async function createRoom(){
       role = 'caller';
-      setStatus('ขอสิทธิ์กล้อง/ไมค์…', 'warn');
+      setStatus('ขอสิทธิ์กล้อง/ไมค์…','warn');
       await getMedia(); createPeer();
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-      // จองรหัสด้วย transaction
-      const { code, ref } = await allocateCodeTx();
-      roomCode = code; roomRef = ref;
+      const r = await api('/api/room/create', { method: 'POST' });
+      code = r.code; $codeBox.style.display='block'; $roomCode.textContent = space(code);
 
-      // สร้าง offer และเก็บลง room
       const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
-      await setDoc(roomRef, { offer: { type: offer.type, sdp: offer.sdp } }, { merge: true });
+      await api('/api/room/offer', { method: 'POST', body: { code, offer } });
 
-      // แสดงรหัส
-      $codeBox.style.display = 'block';
-      $roomCode.textContent = spaceCode(roomCode);
-      setStatus('รอคู่สายเข้าห้อง…', 'warn');
-
-      // ส่ง ICE เรา → offerCandidates
-      const offerCandidates = collection(roomRef, 'offerCandidates');
-      pc.onicecandidate = async (e) => { if (e.candidate) await addDoc(offerCandidates, e.candidate.toJSON()); };
-
-      // รอ answer
-      unsubRoom = onSnapshot(roomRef, async (snap)=>{
-        const data = snap.data();
-        if (!pc.currentRemoteDescription && data?.answer) {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          setStatus('กำลังเชื่อมต่อ…', 'warn');
+      pc.onicecandidate = async (e) => {
+        if (e.candidate) {
+          await api('/api/room/candidate', { method:'POST', body: { code, role, candidate: e.candidate } }).catch(()=>{});
         }
-      });
-
-      // ฟัง answerCandidates (ของอีกฝั่ง)
-      const answerCandidates = collection(roomRef, 'answerCandidates');
-      unsubOtherCands = onSnapshot(answerCandidates, (snap)=>{
-        snap.docChanges().forEach(c=>{
-          if (c.type === 'added') {
-            const cand = new RTCIceCandidate(c.doc.data());
-            pc.addIceCandidate(cand).catch(()=>{});
-          }
-        });
-      });
+      };
+      setStatus('รอคู่สายเข้าห้อง…','warn');
+      startPolling();
     }
 
-    async function joinRoomFlow(){
-      const raw = sanitizeCode($joinCode.value);
-      if (raw.length !== 6) return alert('กรุณากรอกรหัส 6 หลัก');
+    async function joinRoom(){
+      const c = ($joinCode.value||'').replace(/\D/g,'').slice(0,6);
+      if (c.length !== 6) return alert('กรุณากรอกรหัส 6 หลัก');
+      code=c; role='callee';
 
-      const ref = doc(db, 'calls', raw);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) return alert('ไม่พบห้องนี้');
-      const data = snap.data() || {};
-      if (!data.offer) return alert('ห้องยังไม่พร้อมหรือถูกลบไปแล้ว');
-      if (data.answer) return alert('ห้องนี้มีผู้เข้าร่วมครบแล้ว');
-
-      role='callee'; roomRef=ref; roomCode=raw;
+      const st = await api(`/api/room/state?code=${code}`);
+      if (!st.offer) return alert('ห้องยังไม่พร้อมหรือไม่พบห้องนี้');
+      if (st.answer) return alert('ห้องนี้มีผู้เข้าร่วมครบแล้ว');
 
       await getMedia(); createPeer();
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      await pc.setRemoteDescription(new RTCSessionDescription(st.offer));
       const answer = await pc.createAnswer(); await pc.setLocalDescription(answer);
-      await setDoc(roomRef, { answer: { type: answer.type, sdp: answer.sdp }, joinedAt: serverTimestamp() }, { merge: true });
+      await api('/api/room/answer', { method:'POST', body:{ code, answer } });
 
-      // ส่ง ICE เรา → answerCandidates
-      const answerCandidates = collection(roomRef, 'answerCandidates');
-      pc.onicecandidate = async (e) => { if (e.candidate) await addDoc(answerCandidates, e.candidate.toJSON()); };
+      pc.onicecandidate = async (e) => {
+        if (e.candidate) {
+          await api('/api/room/candidate', { method:'POST', body:{ code, role, candidate:e.candidate } }).catch(()=>{});
+        }
+      };
 
-      // ฟัง offerCandidates (ของอีกฝั่ง)
-      const offerCandidates = collection(roomRef, 'offerCandidates');
-      unsubOtherCands = onSnapshot(offerCandidates, (snap)=>{
-        snap.docChanges().forEach(c=>{
-          if (c.type === 'added') {
-            const cand = new RTCIceCandidate(c.doc.data());
-            pc.addIceCandidate(cand).catch(()=>{});
-          }
-        });
-      });
-
-      $codeBox.style.display = 'block';
-      $roomCode.textContent = spaceCode(roomCode);
-      setStatus('กำลังเชื่อมต่อ…', 'warn');
-      // ไม่จำเป็นต้องฟัง room อีก (เราตั้ง answer แล้ว)
+      $codeBox.style.display='block'; $roomCode.textContent = space(code);
+      setStatus('กำลังเชื่อมต่อ…','warn');
+      startPolling();
     }
 
     async function hangup(){
-      setStatus('ยุติการสนทนา', 'err');
-      try{ unsubRoom?.(); unsubOtherCands?.(); }catch{}
-      try{ pc?.close(); }catch{}
-      try{ localStream?.getTracks().forEach(t => t.stop()); }catch{}
+      setStatus('ยุติการสนทนา','err');
+      stopPolling();
+      try { pc?.close(); } catch {}
+      try { localStream?.getTracks().forEach(t => t.stop()); } catch {}
       localStream=null; remoteVideo.srcObject=null; localVideo.srcObject=null; pc=null;
-
-      // ล้างเอกสารสัญญาณเฉพาะกรณีเราเป็นคนสร้าง (caller)
-      if (role === 'caller' && roomRef) {
-        try {
-          const oc = collection(roomRef, 'offerCandidates');
-          const ac = collection(roomRef, 'answerCandidates');
-          const [ocs, acs] = await Promise.all([getDocs(query(oc, orderBy('__name__'))), getDocs(query(ac, orderBy('__name__')))]);
-          await Promise.all([...ocs.docs, ...acs.docs].map(d => deleteDoc(d.ref)));
-          await deleteDoc(roomRef);
-        } catch {}
-      }
-
-      role=null; roomRef=null; roomCode=''; $codeBox.style.display='none';
+      try { if (code) await api('/api/room/cleanup', { method:'POST', body:{ code } }); } catch {}
+      code=''; role=null; $codeBox.style.display='none';
       setStatus('ยังไม่เชื่อมต่อ');
     }
 
-    // UI handlers
-    $create.addEventListener('click', ()=> createRoomFlow().catch(e=> alert(e.message||'เกิดข้อผิดพลาด')));
-    $join.addEventListener('click', ()=> joinRoomFlow().catch(e=> alert(e.message||'เข้าห้องไม่สำเร็จ')));
-    $copy.addEventListener('click', async ()=>{
-      if (!roomCode) return;
-      try{ await navigator.clipboard.writeText(roomCode); $copy.textContent='คัดลอกแล้ว'; setTimeout(()=> $copy.textContent='คัดลอก', 900);}catch{}
-    });
-    $mic.addEventListener('click', ()=>{
-      const t = localStream?.getAudioTracks?.()[0]; if (!t) return; t.enabled=!t.enabled; $mic.textContent=`ไมค์: ${t.enabled?'เปิด':'ปิด'}`;
-    });
-    $cam.addEventListener('click', ()=>{
-      const t = localStream?.getVideoTracks?.()[0]; if (!t) return; t.enabled=!t.enabled; $cam.textContent=`กล้อง: ${t.enabled?'เปิด':'ปิด'}`;
-    });
+    // UI
+    $create.addEventListener('click', ()=> createRoom().catch(e=>alert(e.message||'เกิดข้อผิดพลาด')));
+    $join.addEventListener('click', ()=> joinRoom().catch(e=>alert(e.message||'เข้าห้องไม่สำเร็จ')));
+    $copy.addEventListener('click', async ()=>{ if (!code) return; try{ await navigator.clipboard.writeText(code); $copy.textContent='คัดลอกแล้ว'; setTimeout(()=> $copy.textContent='คัดลอก', 900);}catch{} });
+    $mic.addEventListener('click', ()=>{ const t=localStream?.getAudioTracks?.()[0]; if(!t) return; t.enabled=!t.enabled; $mic.textContent=`ไมค์: ${t.enabled?'เปิด':'ปิด'}`; });
+    $cam.addEventListener('click', ()=>{ const t=localStream?.getVideoTracks?.()[0]; if(!t) return; t.enabled=!t.enabled; $cam.textContent=`กล้อง: ${t.enabled?'เปิด':'ปิด'}`; });
     $hang.addEventListener('click', ()=> hangup());
     window.addEventListener('beforeunload', ()=>{ try{ pc?.close(); }catch{} });
   </script>
