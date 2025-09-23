@@ -1,20 +1,20 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="th">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>โทรด้วยรหัส 6 หลัก (Vercel + Firebase Admin)</title>
+  <title>โทรด้วยรหัส 6 หลัก (WebRTC + Firebase)</title>
   <style>
     :root{ --bg:#0b1220; --panel:#0f172a; --soft:#111827; --text:#e5e7eb; --muted:#9ca3af; --accent:#8b5cf6; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
     *{box-sizing:border-box} html,body{height:100%}
-    body{margin:0;background:linear-gradient(160deg,#0b1220,#0e1530 45%,#0b1220);color:var(--text);
+    body{margin:0;background:linear-gradient(160deg,#0b1220 0,#0e1530 45%,#0b1220 100%);color:var(--text);
       font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Thai","Noto Sans",Arial,"Apple Color Emoji","Segoe UI Emoji";
       display:flex;align-items:center;justify-content:center;padding:18px}
     .app{width:min(1100px,100%);background:rgba(15,23,42,.85);backdrop-filter:blur(8px);border:1px solid #1f2937;border-radius:20px;
       box-shadow:0 20px 60px rgba(0,0,0,.45);padding:18px}
     header{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:12px}
     h1{font-size:18px;margin:0}
-    .pill{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid #2b3344;background:#101826}
+    .status{font-size:12px;color:var(--muted)}
     .grid{display:grid;gap:12px;grid-template-columns:320px 1fr}
     .card{background:var(--soft);border:1px solid #1f2937;border-radius:14px;padding:14px}
     .row{display:flex;gap:8px;align-items:center}
@@ -25,19 +25,20 @@
     .input{background:#0b1220;border:1px solid #1f2937;color:var(--text);padding:10px 12px;border-radius:10px}
     .code{font:600 28px/1.2 ui-monospace,Menlo,Consolas,monospace;letter-spacing:2px}
     .hint{font-size:12px;color:var(--muted)}
+    .pill{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid #2b3344;background:#101826}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
     .videos{display:grid;gap:10px;grid-template-columns:1fr 1fr}
     .vidwrap{position:relative;background:#000;border-radius:12px;overflow:hidden;border:1px solid #1f2937;min-height:240px}
     video{width:100%;height:100%;object-fit:cover;background:#000}
     .label{position:absolute;left:10px;bottom:10px;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:999px;font-size:12px}
     .toolbar{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px}
-    .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
   </style>
 </head>
 <body>
   <div class="app">
     <header>
       <h1>📞 โทรด้วยรหัส 6 หลัก</h1>
-      <div>สถานะ: <span id="status" class="pill">ยังไม่เชื่อมต่อ</span></div>
+      <div class="status">สถานะ: <span id="status" class="pill">ยังไม่เชื่อมต่อ</span></div>
     </header>
 
     <div class="grid">
@@ -77,31 +78,68 @@
     </div>
   </div>
 
-  <script>
+  <!-- Firebase + WebRTC -->
+  <script type="module">
+    // 🔧 ใส่ค่า Firebase Web Config (จาก Project settings → Your apps → Web)
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      appId: "YOUR_APP_ID",
+    };
+
+    // Firebase CDN
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      initializeFirestore, setLogLevel,
+      persistentLocalCache, persistentMultipleTabManager,
+      doc, setDoc, getDoc, collection, addDoc, onSnapshot,
+      serverTimestamp, getDocs, deleteDoc, query, orderBy
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+    // ===== UI helpers =====
     const $ = s => document.querySelector(s);
-    const $status = $('#status'), $create = $('#createBtn'), $codeBox = $('#codeBox'), $roomCode = $('#roomCode'),
-          $copy = $('#copyBtn'), $joinCode = $('#joinCode'), $join = $('#joinBtn'),
-          $mic = $('#micBtn'), $cam = $('#camBtn'), $hang = $('#hangBtn'),
+    const $status = $('#status'), $create = $('#createBtn'), $codeBox = $('#codeBox'),
+          $roomCode = $('#roomCode'), $copy = $('#copyBtn'), $joinCode = $('#joinCode'),
+          $join = $('#joinBtn'), $mic = $('#micBtn'), $cam = $('#camBtn'), $hang = $('#hangBtn'),
           localVideo = $('#localVideo'), remoteVideo = $('#remoteVideo');
     const setStatus = (t, cls='') => { $status.textContent = t; $status.className = 'pill ' + cls; };
-    const space = c => c.split('').join(' ');
 
-    async function api(path, { method='GET', body=null } = {}) {
-      const opt = { method, headers: { 'Content-Type': 'application/json' } };
-      if (body) opt.body = JSON.stringify(body);
-      const res = await fetch(path, opt);
-      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || `HTTP ${res.status}`);
-      return res.json();
-    }
+    // ===== Firebase init (แก้ออฟไลน์) =====
+    const app = initializeApp(firebaseConfig);
+    setLogLevel('error');
+    const db = initializeFirestore(app, {
+      experimentalForceLongPolling: true,   // บังคับ long-polling
+      useFetchStreams: false,
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+    });
 
+    const auth = getAuth(app);
+    const whenAuthed = new Promise((resolve, reject) => {
+      const unsub = onAuthStateChanged(auth, async (u) => {
+        if (u) { unsub(); resolve(u); return; }
+        try { const cred = await signInAnonymously(auth); unsub(); resolve(cred.user); }
+        catch (e) { reject(e); }
+      });
+    });
+
+    // ===== WebRTC =====
     const pcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }], iceCandidatePoolSize: 10 };
-    let pc=null, localStream=null, remoteStream=null, role=null, code='', poll=null, lastMs=0;
+    let pc=null, localStream=null, remoteStream=null, roomRef=null, roomCode='', unsubRoom=null, unsubOffer=null, unsubAnswer=null;
+
+    function genCode(){ return String(Math.floor(Math.random()*1e6)).padStart(6,'0'); }
+    function sanitizeCode(code){ return (code||'').replace(/\D/g,'').slice(0,6); }
 
     async function getMedia(){
       if (localStream) return localStream;
-      localStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
-      localVideo.srcObject = localStream;
-      return localStream;
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+        return localStream;
+      } catch (e) {
+        alert('โปรดยินยอมสิทธิ์กล้อง/ไมค์ แล้วลองใหม่'); throw e;
+      }
     }
     function createPeer(){
       pc = new RTCPeerConnection(pcConfig);
@@ -109,102 +147,128 @@
       pc.ontrack = e => e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
-        if      (s === 'connected')    setStatus('เชื่อมต่อแล้ว','ok');
-        else if (s === 'connecting')   setStatus('กำลังเชื่อมต่อ…','warn');
-        else if (s === 'failed' || s === 'disconnected') setStatus('สัญญาณขาดการเชื่อมต่อ','err');
+        if (s === 'connected') setStatus('เชื่อมต่อแล้ว', 'ok');
+        else if (s === 'connecting') setStatus('กำลังเชื่อมต่อ…', 'warn');
+        else if (s === 'failed' || s === 'disconnected') setStatus('สัญญาณขาดการเชื่อมต่อ', 'err');
       };
       return pc;
     }
-    function startPolling(){
-      stopPolling(); lastMs = 0;
-      poll = setInterval(async () => {
-        try {
-          if (role === 'caller') {
-            const st = await api(`/api/room/state?code=${code}`);
-            if (st.answer && !pc.currentRemoteDescription) {
-              await pc.setRemoteDescription(new RTCSessionDescription(st.answer));
-              setStatus('กำลังเชื่อมต่อ…','warn');
-            }
-          }
-          const res = await api(`/api/room/candidates?code=${code}&role=${role}&after=${lastMs}`);
-          if (Array.isArray(res.items)) {
-            for (const it of res.items) {
-              lastMs = Math.max(lastMs, Number(it.createdAtMs || 0));
-              try { await pc.addIceCandidate(it.candidate); } catch {}
-            }
-          }
-        } catch {}
-      }, 1200);
-    }
-    function stopPolling(){ if (poll) { clearInterval(poll); poll=null; } }
 
-    async function createRoom(){
-      role = 'caller';
-      setStatus('ขอสิทธิ์กล้อง/ไมค์…','warn');
+    async function createRoomFlow(){
+      setStatus(navigator.onLine ? 'ขอสิทธิ์กล้อง/ไมค์…' : 'ออฟไลน์อยู่ ลองเชื่อมเน็ตก่อน', 'warn');
+      await whenAuthed;               // ✅ รอ auth ก่อนเขียน Firestore
       await getMedia(); createPeer();
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-      const r = await api('/api/room/create', { method: 'POST' });
-      code = r.code; $codeBox.style.display='block'; $roomCode.textContent = space(code);
+      // สุ่มรหัสและจอง document
+      for (let i=0;i<8;i++){
+        const code = genCode();
+        const ref = doc(db, 'calls', code);
+        const snap = await getDoc(ref).catch(()=>null);
+        if (snap && !snap.exists()) { roomCode = code; roomRef = ref; break; }
+      }
+      if (!roomRef) { alert('สร้างรหัสไม่สำเร็จ ลองใหม่อีกครั้ง'); return; }
+
+      await setDoc(roomRef, { createdAt: serverTimestamp(), state: 'waiting' });
+
+      const offerCandidates  = collection(roomRef, 'offerCandidates');
+      const answerCandidates = collection(roomRef, 'answerCandidates');
+
+      pc.onicecandidate = async (e) => { if (e.candidate) await addDoc(offerCandidates, e.candidate.toJSON()); };
 
       const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
-      await api('/api/room/offer', { method: 'POST', body: { code, offer } });
+      await setDoc(roomRef, { offer: { type: offer.type, sdp: offer.sdp } }, { merge: true });
 
-      pc.onicecandidate = async (e) => {
-        if (e.candidate) {
-          await api('/api/room/candidate', { method:'POST', body: { code, role, candidate: e.candidate } }).catch(()=>{});
+      $codeBox.style.display = 'block'; $roomCode.textContent = roomCode.split('').join(' ');
+      setStatus('รอคู่สายเข้าห้อง…', 'warn');
+
+      unsubRoom = onSnapshot(roomRef, async (snap) => {
+        const data = snap.data();
+        if (!pc.currentRemoteDescription && data?.answer) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          setStatus('กำลังเชื่อมต่อ…', 'warn');
         }
-      };
-      setStatus('รอคู่สายเข้าห้อง…','warn');
-      startPolling();
+      });
+      unsubAnswer = onSnapshot(answerCandidates, (snap)=>{
+        snap.docChanges().forEach(c=>{
+          if (c.type === 'added') {
+            const cand = new RTCIceCandidate(c.doc.data());
+            pc.addIceCandidate(cand).catch(()=>{});
+          }
+        });
+      });
     }
 
-    async function joinRoom(){
-      const c = ($joinCode.value||'').replace(/\D/g,'').slice(0,6);
-      if (c.length !== 6) return alert('กรุณากรอกรหัส 6 หลัก');
-      code=c; role='callee';
+    async function joinRoomFlow(code){
+      code = sanitizeCode(code); if (code.length !== 6) return alert('กรอกรหัส 6 หลัก');
+      await whenAuthed;               // ✅ รอ auth ก่อนเขียน answer/candidates
 
-      const st = await api(`/api/room/state?code=${code}`);
-      if (!st.offer) return alert('ห้องยังไม่พร้อมหรือไม่พบห้องนี้');
-      if (st.answer) return alert('ห้องนี้มีผู้เข้าร่วมครบแล้ว');
+      const ref = doc(db, 'calls', code);
+      const snap = await getDoc(ref).catch(()=>null);
+      if (!snap || !snap.exists()) return alert('ไม่พบห้องนี้');
+      const data = snap.data() || {};
+      if (!data.offer) return alert('ห้องยังไม่พร้อม หรือถูกลบไปแล้ว');
+      if (data.answer) return alert('ห้องนี้มีผู้เข้าร่วมครบแล้ว');
+
+      roomRef = ref; roomCode = code;
 
       await getMedia(); createPeer();
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-      await pc.setRemoteDescription(new RTCSessionDescription(st.offer));
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
       const answer = await pc.createAnswer(); await pc.setLocalDescription(answer);
-      await api('/api/room/answer', { method:'POST', body:{ code, answer } });
+      await setDoc(roomRef, { answer: { type: answer.type, sdp: answer.sdp }, joinedAt: serverTimestamp() }, { merge: true });
 
-      pc.onicecandidate = async (e) => {
-        if (e.candidate) {
-          await api('/api/room/candidate', { method:'POST', body:{ code, role, candidate:e.candidate } }).catch(()=>{});
-        }
-      };
+      const offerCandidates  = collection(roomRef, 'offerCandidates');
+      const answerCandidates = collection(roomRef, 'answerCandidates');
 
-      $codeBox.style.display='block'; $roomCode.textContent = space(code);
-      setStatus('กำลังเชื่อมต่อ…','warn');
-      startPolling();
+      pc.onicecandidate = async (e) => { if (e.candidate) await addDoc(answerCandidates, e.candidate.toJSON()); };
+
+      unsubOffer = onSnapshot(offerCandidates, (snap)=>{
+        snap.docChanges().forEach(c=>{
+          if (c.type === 'added') {
+            const cand = new RTCIceCandidate(c.doc.data());
+            pc.addIceCandidate(cand).catch(()=>{});
+          }
+        });
+      });
+
+      $codeBox.style.display='block'; $roomCode.textContent = roomCode.split('').join(' ');
+      setStatus('กำลังเชื่อมต่อ…', 'warn');
     }
 
     async function hangup(){
-      setStatus('ยุติการสนทนา','err');
-      stopPolling();
-      try { pc?.close(); } catch {}
-      try { localStream?.getTracks().forEach(t => t.stop()); } catch {}
+      setStatus('ยุติการสนทนา', 'err');
+      try{ unsubRoom?.(); unsubOffer?.(); unsubAnswer?.(); }catch{}
+      try{ pc?.close(); }catch{}
+      try{ localStream?.getTracks().forEach(t => t.stop()); }catch{}
       localStream=null; remoteVideo.srcObject=null; localVideo.srcObject=null; pc=null;
-      try { if (code) await api('/api/room/cleanup', { method:'POST', body:{ code } }); } catch {}
-      code=''; role=null; $codeBox.style.display='none';
+
+      if (roomRef) {
+        try {
+          const oc = collection(roomRef, 'offerCandidates');
+          const ac = collection(roomRef, 'answerCandidates');
+          const [ocs, acs] = await Promise.all([getDocs(query(oc, orderBy('__name__'))), getDocs(query(ac, orderBy('__name__')))]);
+          await Promise.all([...ocs.docs, ...acs.docs].map(d => deleteDoc(d.ref)));
+          await deleteDoc(roomRef);
+        } catch {}
+      }
+      roomRef=null; roomCode=''; $codeBox.style.display='none';
       setStatus('ยังไม่เชื่อมต่อ');
     }
 
-    // UI
-    $create.addEventListener('click', ()=> createRoom().catch(e=>alert(e.message||'เกิดข้อผิดพลาด')));
-    $join.addEventListener('click', ()=> joinRoom().catch(e=>alert(e.message||'เข้าห้องไม่สำเร็จ')));
-    $copy.addEventListener('click', async ()=>{ if (!code) return; try{ await navigator.clipboard.writeText(code); $copy.textContent='คัดลอกแล้ว'; setTimeout(()=> $copy.textContent='คัดลอก', 900);}catch{} });
+    // ===== UI =====
+    $create.addEventListener('click', ()=> createRoomFlow().catch(e=> alert(e.message||'เกิดข้อผิดพลาด (อาจออฟไลน์)')));
+    $join.addEventListener('click', ()=> joinRoomFlow($joinCode.value).catch(e=> alert(e.message||'เข้าห้องไม่สำเร็จ')));
+    $copy.addEventListener('click', async ()=>{ if(!roomCode) return; try{ await navigator.clipboard.writeText(roomCode); $copy.textContent='คัดลอกแล้ว'; setTimeout(()=> $copy.textContent='คัดลอก', 900);}catch{} });
     $mic.addEventListener('click', ()=>{ const t=localStream?.getAudioTracks?.()[0]; if(!t) return; t.enabled=!t.enabled; $mic.textContent=`ไมค์: ${t.enabled?'เปิด':'ปิด'}`; });
     $cam.addEventListener('click', ()=>{ const t=localStream?.getVideoTracks?.()[0]; if(!t) return; t.enabled=!t.enabled; $cam.textContent=`กล้อง: ${t.enabled?'เปิด':'ปิด'}`; });
     $hang.addEventListener('click', ()=> hangup());
     window.addEventListener('beforeunload', ()=>{ try{ pc?.close(); }catch{} });
+
+    // แจ้งสถานะออนไลน์/ออฟไลน์
+    const updateNet = ()=> setStatus(navigator.onLine ? 'พร้อมใช้งาน' : 'ออฟไลน์อยู่', navigator.onLine ? '' : 'warn');
+    window.addEventListener('online', updateNet); window.addEventListener('offline', updateNet);
   </script>
 </body>
 </html>
