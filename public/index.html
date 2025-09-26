@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>โทรด้วยรหัส 6 หลัก (WebRTC + Render)</title>
+  <style>
+    :root{ --bg:#0b1220; --panel:#0f172a; --soft:#111827; --text:#e5e7eb; --muted:#9ca3af; --accent:#8b5cf6; --ok:#10b981; --err:#ef4444 }
+    *{box-sizing:border-box} html,body{height:100%}
+    body{margin:0;background:linear-gradient(160deg,#0b1220 0,#0e1530 45%,#0b1220 100%);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Thai","Noto Sans",Arial}
+    .wrap{max-width:1100px;margin:0 auto;padding:24px}
+    .card{background:var(--panel);border:1px solid #1f2937;border-radius:16px;box-shadow:0 10px 40px rgba(0,0,0,.35);padding:16px}
+    h1{margin:0 0 8px 0;font-size:22px}
+    .muted{color:var(--muted);font-size:14px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+    input,select{background:var(--soft);border:1px solid #1f2937;border-radius:12px;color:var(--text);padding:10px 12px;font-size:16px;outline:none}
+    button{background:var(--accent);color:white;border:none;border-radius:12px;padding:10px 14px;font-size:16px;cursor:pointer}
+    button.ghost{background:transparent;border:1px solid #273042}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    video{width:100%;max-height:46vh;background:#000;border-radius:14px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .status{margin-top:8px;font-size:14px}
+    .ok{color:var(--ok)} .err{color:var(--err)}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    @media (max-width:900px){ .grid{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>📞 โทรด้วยรหัส 6 หลัก</h1>
+      <div class="muted">แชร์รหัสให้เพื่อน 1 คน แล้วกด Join เพื่อเริ่มคุย (รองรับ 1:1)</div>
+      <div class="row">
+        <input id="room" placeholder="เช่น 123456" maxlength="6" pattern="[0-9]{6}" />
+        <button id="gen" title="สุ่มรหัส">สุ่ม</button>
+        <button id="copy" class="ghost" title="คัดลอกลิงก์ห้อง">คัดลอกลิงก์</button>
+        <select id="mode">
+          <option value="av">ภาพ + เสียง</option>
+          <option value="audio">เสียงอย่างเดียว</option>
+        </select>
+        <button id="join">Join</button>
+        <button id="leave" disabled>Leave</button>
+        <span id="stat" class="status">ยังไม่เชื่อมต่อ</span>
+      </div>
+      <div class="controls">
+        <button id="mute" class="ghost" disabled>ปิด/เปิดไมค์</button>
+        <button id="cam" class="ghost" disabled>ปิด/เปิดกล้อง</button>
+        <button id="share" class="ghost" disabled>แชร์หน้าจอ</button>
+        <select id="devices" disabled></select>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="muted">ฉัน</div>
+        <video id="me" autoplay playsinline muted></video>
+      </div>
+      <div class="card">
+        <div class="muted">เพื่อน</div>
+        <video id="peer" autoplay playsinline></video>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const WS_URL = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws';
+    const el = (id) => document.getElementById(id);
+    const elRoom = el('room');
+    const elGen = el('gen');
+    const elCopy = el('copy');
+    const elJoin = el('join');
+    const elLeave = el('leave');
+    const elMode = el('mode');
+    const elStat = el('stat');
+    const elMute = el('mute');
+    const elCam = el('cam');
+    const elShare = el('share');
+    const elDevices = el('devices');
+    const vMe = el('me');
+    const vPeer = el('peer');
+
+    const pcCfg = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    let ws, pc, localStream, screenTrack, joined = false, makingOffer = false;
+
+    // Pre-fill room from URL (?room=123456 or #123456)
+    const url = new URL(location.href);
+    const preset = url.searchParams.get('room') || location.hash.replace('#','');
+    if (preset) elRoom.value = preset;
+
+    elGen.onclick = () => { elRoom.value = String(Math.floor(100000 + Math.random()*900000)); };
+    elCopy.onclick = async () => {
+      const rid = (elRoom.value||'').trim();
+      if (!/^[0-9]{6}$/.test(rid)) { setStatus('กรอกรหัส 6 หลักให้ถูกต้องก่อนคัดลอก', 'err'); return; }
+      const link = location.origin + location.pathname + `?room=${rid}`;
+      await navigator.clipboard.writeText(link).catch(()=>{});
+      setStatus('คัดลอกลิงก์ห้องแล้ว', 'ok');
+    };
+
+    function setStatus(msg, cls){ elStat.textContent = msg; elStat.className = 'status ' + (cls||''); }
+
+    function constraintsByMode(){
+      const audio = { echoCancellation:true, noiseSuppression:true, autoGainControl:true };
+      if (elMode.value === 'audio') return { audio, video:false };
+      return { audio, video:{ width:{ideal:1280}, height:{ideal:720} } };
+    }
+
+    async function listDevices(){
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter(d=>d.kind==='videoinput');
+        elDevices.innerHTML = '<option value="">สลับกล้อง…</option>' + cams.map(c=>`<option value="${c.deviceId}">${c.label||'Camera'}</option>`).join('');
+      } catch{}
+    }
+
+    async function ensureMedia(){
+      if (localStream) return localStream;
+      localStream = await navigator.mediaDevices.getUserMedia(constraintsByMode());
+      vMe.srcObject = localStream;
+      enableControls(true);
+      await listDevices();
+      return localStream;
+    }
+
+    function enableControls(on){
+      elMute.disabled = !on; elCam.disabled = !on; elShare.disabled = !on; elDevices.disabled = !on;
+    }
+
+    function connectWS(){
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      ws = new WebSocket(WS_URL);
+      ws.onopen = () => setStatus('เชื่อมต่อสัญญาณแล้ว • พร้อมเข้าห้อง', 'ok');
+      ws.onclose = () => setStatus('ขาดการเชื่อมต่อสัญญาณ', 'err');
+      ws.onerror = () => setStatus('เครือข่ายมีปัญหา', 'err');
+      ws.onmessage = async (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'room-full') {
+          setStatus('ห้องเต็ม (รองรับ 2 คน)', 'err');
+          toggleButtons(false);
+        } else if (msg.type === 'joined') {
+          setStatus('เข้าห้องแล้ว กำลังตั้งค่าสาย…', 'ok');
+          if (msg.peers > 0) await startCallerFlow();
+        } else if (msg.type === 'peer-join') {
+          if (joined) startCallerFlow();
+        } else if (msg.type === 'offer') {
+          await onOffer(msg.sdp);
+        } else if (msg.type === 'answer') {
+          await onAnswer(msg.sdp);
+        } else if (msg.type === 'ice') {
+          await pc?.addIceCandidate(msg.candidate).catch(()=>{});
+        } else if (msg.type === 'peer-leave') {
+          setStatus('คู่สายออกจากห้อง', '');
+          if (pc) { pc.close(); pc = null; vPeer.srcObject = null; }
+          if (screenTrack) { screenTrack.stop(); screenTrack = null; }
+        }
+      };
+    }
+
+    function joinRoom(){
+      const roomId = (elRoom.value||'').trim();
+      if (!/^[0-9]{6}$/.test(roomId)) { setStatus('กรอกรหัส 6 หลักให้ถูกต้อง', 'err'); return; }
+      connectWS();
+      ws.addEventListener('open', function once(){
+        ws.removeEventListener('open', once);
+        ws.send(JSON.stringify({ type: 'join', roomId }));
+        joined = true; toggleButtons(true);
+        history.replaceState(null, '', `?room=${roomId}`);
+      });
+    }
+
+    function leaveRoom(){
+      joined = false; toggleButtons(false);
+      try { ws?.send(JSON.stringify({ type: 'leave' })); } catch {}
+      if (pc) { pc.close(); pc = null; }
+      if (screenTrack) { screenTrack.stop(); screenTrack = null; }
+      vPeer.srcObject = null; setStatus('ออกจากห้องแล้ว', '');
+    }
+
+    function toggleButtons(isJoined){
+      elJoin.disabled = isJoined; elLeave.disabled = !isJoined; elGen.disabled = isJoined; elCopy.disabled = isJoined; elRoom.disabled = isJoined; elMode.disabled = isJoined;
+    }
+
+    async function createPC(){
+      if (pc) return pc;
+      pc = new RTCPeerConnection(pcCfg);
+      pc.onicecandidate = (e)=>{ if (e.candidate) ws?.send(JSON.stringify({ type: 'ice', candidate: e.candidate })); };
+      pc.ontrack = (e)=>{ vPeer.srcObject = e.streams[0]; };
+      const stream = await ensureMedia();
+      for (const t of stream.getTracks()) pc.addTrack(t, stream);
+      return pc;
+    }
+
+    async function startCallerFlow(){
+      await createPC();
+      try {
+        makingOffer = true;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws?.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+      } finally { makingOffer = false; }
+    }
+
+    async function onOffer(remoteSDP){
+      await createPC();
+      const offerCollision = makingOffer || pc.signalingState !== 'stable';
+      if (offerCollision) {
+        await Promise.all([
+          pc.setLocalDescription({ type: 'rollback' }).catch(()=>{}),
+          pc.setRemoteDescription(remoteSDP)
+        ]);
+      } else {
+        await pc.setRemoteDescription(remoteSDP);
+      }
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws?.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+    }
+
+    async function onAnswer(remoteSDP){
+      await pc?.setRemoteDescription(remoteSDP);
+    }
+
+    // Media controls
+    elMute.onclick = () => {
+      const a = localStream?.getAudioTracks?.()[0];
+      if (!a) return; a.enabled = !a.enabled; elMute.textContent = a.enabled ? 'ปิดไมค์' : 'เปิดไมค์';
+    };
+    elCam.onclick = () => {
+      const v = localStream?.getVideoTracks?.()[0];
+      if (!v) return; v.enabled = !v.enabled; elCam.textContent = v.enabled ? 'ปิดกล้อง' : 'เปิดกล้อง';
+    };
+    elDevices.onchange = async () => {
+      const id = elDevices.value; if (!id) return;
+      const newStream = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{exact:id} }, audio:false });
+      const newTrack = newStream.getVideoTracks()[0];
+      const sender = pc.getSenders().find(s=>s.track && s.track.kind==='video');
+      await sender.replaceTrack(newTrack);
+      localStream.getVideoTracks().forEach(t=>t.stop());
+      localStream.removeTrack(localStream.getVideoTracks()[0]);
+      localStream.addTrack(newTrack);
+      vMe.srcObject = localStream;
+    };
+    elShare.onclick = async () => {
+      try {
+        const ds = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:false });
+        screenTrack = ds.getVideoTracks()[0];
+        const sender = pc.getSenders().find(s=>s.track && s.track.kind==='video');
+        await sender.replaceTrack(screenTrack);
+        screenTrack.onended = async () => {
+          const cam = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+          const camTrack = cam.getVideoTracks()[0];
+          await sender.replaceTrack(camTrack);
+        };
+      } catch(e){ setStatus('ยกเลิกแชร์หน้าจอ', ''); }
+    };
+
+    // UI bindings
+    elJoin.onclick = joinRoom; elLeave.onclick = leaveRoom;
+
+    // Prepare early
+    ensureMedia().then(()=>setStatus('กล้อง/ไมค์พร้อม')).catch(()=>setStatus('ขอสิทธิ์ไมค์/กล้องไม่สำเร็จ','err'));
+    connectWS();
+
+    // Auto-join if room provided in URL
+    if (/^[0-9]{6}$/.test(elRoom.value||'')) joinRoom();
+
+    window.addEventListener('beforeunload', leaveRoom);
+  </script>
+</body>
+</html>

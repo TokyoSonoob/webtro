@@ -1,15 +1,13 @@
 {
-  "name": "server",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "firebase-admin": "^13.5.0"
-  }
+"name": "webrtc-call-on-render",
+"version": "1.0.0",
+"private": true,
+"scripts": {
+"start": "node server.js"
+},
+"dependencies": {
+"express": "^4.19.2",
+"ws": "^8.18.0",
+"uuid": "^9.0.1"
+}
 }
