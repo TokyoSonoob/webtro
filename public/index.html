@@ -1,203 +1,103 @@
 <!doctype html>
 <html lang="th">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>โทรเสียงด้วยรหัสห้อง (WebRTC)</title>
-  <style>
-    :root{ --bg:#0b1220; --panel:#0f172a; --soft:#111827; --text:#e5e7eb; --muted:#9ca3af; --accent:#8b5cf6; --ok:#10b981; --err:#ef4444 }
-    *{box-sizing:border-box} html,body{height:100%}
-    body{margin:0;background:#0b1220;color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Thai","Noto Sans",Arial}
-    .wrap{max-width:720px;margin:0 auto;padding:20px}
-    .card{background:var(--panel);border:1px solid #243045;border-radius:16px;padding:16px;box-shadow:0 10px 40px rgba(0,0,0,.35)}
-    h1{margin:0 0 8px 0;font-size:22px}
-    .muted{color:var(--muted);font-size:14px;margin-top:4px}
-    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
-    input{background:var(--soft);border:1px solid #263246;border-radius:12px;color:var(--text);padding:10px 12px;font-size:16px;outline:none}
-    button{background:var(--accent);color:white;border:none;border-radius:12px;padding:10px 14px;font-size:16px;cursor:pointer}
-    button.ghost{background:transparent;border:1px solid #273042}
-    button:disabled{opacity:.6}
-    .status{margin-top:10px;font-size:14px}
-    .ok{color:var(--ok)} .err{color:var(--err)}
-    .controls{display:flex;gap:8px;margin-top:10px}
-    .roomtag{background:#141b2c;border:1px dashed #2a3751;border-radius:10px;padding:8px 10px;margin-top:10px;font-family:ui-monospace,Consolas,monospace}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Minecraft Voice Hub</title>
+<style>
+  body { background:#0b1220; color:#e5e7eb; font-family:sans-serif; padding:20px; }
+  .card { background:#111827; padding:20px; border-radius:12px; max-width:600px; margin:auto; }
+  input, button { padding:10px; margin:5px 0; border-radius:8px; border:none; }
+  input { width:100%; background:#1f2937; color:#e5e7eb; }
+  button { background:#8b5cf6; color:#fff; cursor:pointer; }
+  button:disabled { opacity:.6; }
+  .pill { display:inline-block; background:#1f2937; padding:5px 10px; border-radius:999px; margin:2px; font-size:12px; }
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <h1>📞 โทรเสียงด้วยรหัสห้อง</h1>
-      <div class="muted">กด “สร้างห้อง” เพื่อรับรหัส แล้วส่งรหัสให้เพื่อนเข้าห้องเดียวกัน</div>
+<div class="card">
+  <h1>🔊 Minecraft Voice Hub</h1>
+  <input id="code" placeholder="กรอกรหัส 6 หลัก">
+  <button id="join">Join</button>
+  <button id="leave" disabled>Leave</button>
+  <button id="mute" disabled>Mute</button>
+  <div id="status">ยังไม่เชื่อมต่อ</div>
+  <div id="peers"></div>
+</div>
+<div id="audios"></div>
+<script>
+const WS_URL = (location.protocol === 'https:'?'wss':'ws')+'://'+location.host+'/ws';
+const ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+let ws, local, myId=Math.random().toString(36).slice(2,8);
+const pcs=new Map(), audios=new Map();
 
-      <div class="row">
-        <button id="create">สร้างห้อง</button>
-        <input id="code" placeholder="กรอกรหัส 6 หลัก" maxlength="6" pattern="[0-9]{6}">
-        <button id="go" class="ghost">เข้าห้องนี้</button>
-      </div>
+const codeEl=document.getElementById("code");
+const join=document.getElementById("join");
+const leave=document.getElementById("leave");
+const mute=document.getElementById("mute");
+const status=document.getElementById("status");
+const peers=document.getElementById("peers");
 
-      <div id="roomLine" class="roomtag" style="display:none"></div>
+function log(s){ status.textContent=s; }
 
-      <div class="controls">
-        <button id="join" disabled>Join</button>
-        <button id="leave" disabled>Leave</button>
-        <button id="mute" class="ghost" disabled>ปิดไมค์</button>
-      </div>
+async function ensureMic(){
+  if(local) return local;
+  local = await navigator.mediaDevices.getUserMedia({audio:true});
+  return local;
+}
 
-      <div id="stat" class="status">ยังไม่เชื่อมต่อ</div>
-    </div>
+function connectWS(){
+  ws=new WebSocket(WS_URL);
+  ws.onmessage=e=>onSignal(JSON.parse(e.data));
+}
 
-    <!-- ไม่ต้องมีวิดีโอ มีแค่เสียงฝั่งคู่สนทนา -->
-    <audio id="peer" autoplay></audio>
-  </div>
+join.onclick=async()=>{
+  if(!/^\d{6}$/.test(codeEl.value)) return log("รหัสไม่ถูกต้อง");
+  await ensureMic(); connectWS();
+  ws.onopen=()=>ws.send(JSON.stringify({type:"join",roomId:codeEl.value,peerId:myId}));
+  join.disabled=true; leave.disabled=false; mute.disabled=false;
+};
 
-  <script>
-    const WS_URL = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws';
-    const $ = (id)=>document.getElementById(id);
-    const elCreate = $('create'), elGo = $('go'), elCode = $('code');
-    const elJoin = $('join'), elLeave = $('leave'), elMute = $('mute');
-    const elStat = $('stat'), elRoomLine = $('roomLine'), aPeer = $('peer');
+leave.onclick=()=>{
+  ws?.send(JSON.stringify({type:"leave"}));
+  for(const id of [...pcs.keys()]) closePC(id);
+  join.disabled=false; leave.disabled=true; mute.disabled=true;
+};
 
-    const pcCfg = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-    let ws, pc, localStream, joined = false, makingOffer = false;
+mute.onclick=()=>{
+  const t=local?.getAudioTracks()[0]; if(!t)return;
+  t.enabled=!t.enabled; mute.textContent=t.enabled?"Mute":"Unmute";
+};
 
-    // อ่านรหัสจาก URL เพื่อนำเข้าอัตโนมัติ
-    const url = new URL(location.href);
-    const roomId = url.searchParams.get('room');
-    if (roomId) { elCode.value = roomId; showRoom(roomId); elJoin.disabled = false; }
+async function createPC(id,offer){
+  if(pcs.has(id)) return pcs.get(id);
+  const pc=new RTCPeerConnection({iceServers:ICE});
+  pcs.set(id,pc);
+  local.getTracks().forEach(t=>pc.addTrack(t,local));
+  const au=document.createElement("audio"); au.autoplay=true; audios.set(id,au);
+  document.getElementById("audios").appendChild(au);
+  pc.ontrack=e=>{au.srcObject=e.streams[0];};
+  pc.onicecandidate=e=>{if(e.candidate)ws.send(JSON.stringify({type:"ice",to:id,from:myId,candidate:e.candidate}));};
+  if(offer){
+    await pc.setLocalDescription(await pc.createOffer());
+    ws.send(JSON.stringify({type:"offer",to:id,from:myId,sdp:pc.localDescription}));
+  }
+  return pc;
+}
+function closePC(id){
+  pcs.get(id)?.close(); pcs.delete(id);
+  audios.get(id)?.remove(); audios.delete(id);
+  [...peers.children].forEach(el=>{if(el.dataset.id===id)el.remove();});
+}
 
-    elCreate.onclick = () => {
-      const code = String(Math.floor(100000 + Math.random()*900000));
-      location.href = `?room=${code}`; // พาไปหน้าห้องทันที
-    };
-    elGo.onclick = () => {
-      const c = (elCode.value||'').trim();
-      if (!/^[0-9]{6}$/.test(c)) return setStatus('กรอกรหัส 6 หลักให้ถูกต้อง','err');
-      location.href = `?room=${c}`;
-    };
-
-    function showRoom(code){
-      elRoomLine.style.display = '';
-      elRoomLine.textContent = `รหัสห้อง: ${code}`;
-    }
-
-    function setStatus(msg, cls){ elStat.textContent = msg; elStat.className = 'status ' + (cls||''); }
-
-    async function ensureMedia(){
-      if (localStream) return localStream;
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true },
-        video: false
-      });
-      elMute.disabled = false;
-      return localStream;
-    }
-
-    function connectWS(){
-      if (ws && ws.readyState === WebSocket.OPEN) return;
-      ws = new WebSocket(WS_URL);
-      ws.onopen = () => setStatus('เชื่อมต่อสัญญาณแล้ว • พร้อมเข้าห้อง','ok');
-      ws.onclose = () => setStatus('ขาดการเชื่อมต่อสัญญาณ','err');
-      ws.onerror = () => setStatus('เครือข่ายมีปัญหา','err');
-      ws.onmessage = async (ev) => {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'room-full') {
-          setStatus('ห้องเต็ม (รองรับ 2 คน)','err');
-          toggle(false);
-        } else if (msg.type === 'joined') {
-          setStatus('เข้าห้องแล้ว กำลังเชื่อมสาย…','ok');
-          if (msg.peers > 0) await startCaller();
-        } else if (msg.type === 'peer-join') {
-          if (joined) startCaller();
-        } else if (msg.type === 'offer') {
-          await onOffer(msg.sdp);
-        } else if (msg.type === 'answer') {
-          await onAnswer(msg.sdp);
-        } else if (msg.type === 'ice') {
-          await pc?.addIceCandidate(msg.candidate).catch(()=>{});
-        } else if (msg.type === 'peer-leave') {
-          setStatus('คู่สายออกจากห้อง','');
-          if (pc) { pc.close(); pc = null; aPeer.srcObject = null; }
-        }
-      };
-    }
-
-    function toggle(on){
-      elJoin.disabled = on; elLeave.disabled = !on;
-      elCreate.disabled = on; elGo.disabled = on; elCode.disabled = on;
-    }
-
-    elJoin.onclick = joinRoom;
-    elLeave.onclick = leaveRoom;
-    elMute.onclick = () => {
-      const a = localStream?.getAudioTracks?.()[0];
-      if (!a) return;
-      a.enabled = !a.enabled;
-      elMute.textContent = a.enabled ? 'ปิดไมค์' : 'เปิดไมค์';
-    };
-
-    async function joinRoom(){
-      const code = (elCode.value||'').trim();
-      if (!/^[0-9]{6}$/.test(code)) return setStatus('กรอกรหัส 6 หลักให้ถูกต้อง','err');
-      connectWS();
-      await ensureMedia();
-      ws.addEventListener('open', function once(){
-        ws.removeEventListener('open', once);
-        ws.send(JSON.stringify({ type: 'join', roomId: code }));
-        joined = true; toggle(true);
-        showRoom(code);
-      });
-    }
-
-    function leaveRoom(){
-      joined = false; toggle(false);
-      try { ws?.send(JSON.stringify({ type: 'leave' })); } catch {}
-      if (pc) { pc.close(); pc = null; }
-      aPeer.srcObject = null;
-      setStatus('ออกจากห้องแล้ว','');
-    }
-
-    async function createPC(){
-      if (pc) return pc;
-      pc = new RTCPeerConnection(pcCfg);
-      pc.onicecandidate = (e)=>{ if (e.candidate) ws?.send(JSON.stringify({ type:'ice', candidate:e.candidate })); };
-      pc.ontrack = (e)=>{ aPeer.srcObject = e.streams[0]; };
-      const stream = await ensureMedia();
-      for (const t of stream.getTracks()) pc.addTrack(t, stream);
-      return pc;
-    }
-
-    async function startCaller(){
-      await createPC();
-      try {
-        makingOffer = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws?.send(JSON.stringify({ type:'offer', sdp: pc.localDescription }));
-      } finally { makingOffer = false; }
-    }
-
-    async function onOffer(remoteSDP){
-      await createPC();
-      const glare = makingOffer || pc.signalingState !== 'stable';
-      if (glare) {
-        await Promise.all([
-          pc.setLocalDescription({ type:'rollback' }).catch(()=>{}),
-          pc.setRemoteDescription(remoteSDP)
-        ]);
-      } else {
-        await pc.setRemoteDescription(remoteSDP);
-      }
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      ws?.send(JSON.stringify({ type:'answer', sdp: pc.localDescription }));
-    }
-
-    async function onAnswer(remoteSDP){
-      await pc?.setRemoteDescription(remoteSDP);
-    }
-
-    // ถ้าเปิดมาพร้อม ?room=xxxx ให้พร้อมกด Join ได้ทันที
-    if (roomId) { elJoin.disabled = false; setStatus('พร้อมเข้าห้องแล้ว กด Join',''); }
-  </script>
+async function onSignal(m){
+  if(m.type==="joined"){ log("เข้าห้องแล้ว"); m.peers.forEach(p=>createPC(p,true)); }
+  if(m.type==="peer-join"){ createPC(m.peerId,true); const s=document.createElement("span"); s.className="pill"; s.dataset.id=m.peerId; s.textContent="peer:"+m.peerId; peers.appendChild(s); }
+  if(m.type==="peer-leave"){ closePC(m.peerId); }
+  if(m.type==="offer"){const pc=await createPC(m.from,false); await pc.setRemoteDescription(m.sdp); await pc.setLocalDescription(await pc.createAnswer()); ws.send(JSON.stringify({type:"answer",to:m.from,from:myId,sdp:pc.localDescription}));}
+  if(m.type==="answer"){await pcs.get(m.from)?.setRemoteDescription(m.sdp);}
+  if(m.type==="ice"){await pcs.get(m.from)?.addIceCandidate(m.candidate);}
+}
+</script>
 </body>
 </html>
