@@ -1,4 +1,4 @@
-// server.js — Voice hub (key-by-code only) + signaling
+// server.js — Voice hub (key-by-code) + BedrockBridge webhook + signaling
 const path = require("path");
 const express = require("express");
 const { WebSocketServer } = require("ws");
@@ -13,7 +13,9 @@ const server = app.listen(PORT, () => {
   console.log("Listening on http://localhost:" + PORT);
 });
 
-/** ห้องคุย ตามรหัส 6 หลัก */
+/* =========================
+   STATE (ผูกทุกอย่างด้วย "รหัส")
+========================= */
 const rooms = new Map(); // Map<code, { peers: Map<peerId, ws> }>
 const six = () => String(Math.floor(100000 + Math.random() * 900000));
 const ensureRoom = (code) => {
@@ -21,21 +23,66 @@ const ensureRoom = (code) => {
   return rooms.get(code);
 };
 
-/**
- * POST /api/player-enter
- * เซิร์ฟเวอร์เกมเรียกทุกครั้งที่ “ผู้เล่นเข้ามา”
- * - สุ่มรหัสใหม่ 6 หลักทุกครั้ง
- * - เตรียมห้องตามรหัสนั้น
- * - ส่งคำสั่ง scoreboard ที่ต้องรันคืนไปให้
- */
-app.post("/api/player-enter", (req, res) => {
+/* =========================================================
+   1) Endpoint สำหรับ BedrockBridge ยิงมาบอกเหตุการณ์จากเซิร์ฟ
+   ---------------------------------------------------------
+   - เรารองรับ 2 เหตุการณ์พื้นฐาน: playerJoin, chat (ขยายเพิ่มทีหลังได้)
+   - ทุกครั้งที่ playerJoin => สุ่ม "รหัสใหม่ 6 หลัก", เตรียมห้อง,
+     แล้วตอบ "ชุดคำสั่ง scoreboard" กลับไปให้ BedrockBridge รันในเกม
+   - รูปแบบ request (ตัวอย่าง):
+     { "event": "playerJoin", "player": "Steve", "server": "th-01" }
+   - รูปแบบ response:
+     {
+       ok: true,
+       code: "123456",
+       commands: [
+         "scoreboard objectives add SeamuwwApi dummy",
+         "scoreboard players set Seamuww SeamuwwApi 123456",
+         "tellraw @a {\"rawtext\":[{\"text\":\"§a[Voice]§r รหัสห้องคุย: §e123456§r  เปิดเว็บ: https://webtro.onrender.com/?room=123456\"}]}"
+       ]
+     }
+========================================================= */
+app.post("/bridge/event", (req, res) => {
+  const { event, player, server } = req.body || {};
+
+  // รองรับ /ping ง่ายๆ ไว้ให้ทดสอบ
+  if (event === "ping") return res.json({ ok: true, pong: true });
+
+  if (event === "playerJoin") {
+    // สุ่มรหัสใหม่ทุกครั้งที่มีคนเข้า
+    let code = six();
+    while (rooms.has(code)) code = six(); // กันซ้ำเล็กน้อย
+    ensureRoom(code);
+
+    const url = `https://webtro.onrender.com/?room=${code}`;
+
+    const commands = [
+      // ทำ scoreboard ตามที่คุณกำหนด
+      `scoreboard objectives add SeamuwwApi dummy`,
+      `scoreboard players set Seamuww SeamuwwApi ${code}`,
+      // แจ้งผู้เล่นที่เข้าสู่เซิร์ฟ (หรือทั้งเซิร์ฟก็ได้)
+      `tellraw ${player ? `"${player}"` : "@a"} {"rawtext":[{"text":"§a[Voice]§r รหัสห้องคุย: §e${code}§r\\nเปิดเว็บ: ${url}"}]}`
+    ];
+
+    return res.json({ ok: true, code, commands });
+  }
+
+  if (event === "chat") {
+    // ยังไม่ใช้ก็ได้—เผื่อในอนาคตอยากสั่งงานด้วยแชต เช่น !voice
+    return res.json({ ok: true });
+  }
+
+  return res.status(400).json({ ok: false, error: "unknown event" });
+});
+
+/* =========================================================
+   2) (ออปชัน) endpoint แบบเก่าที่เกมเรียกได้เอง (ถ้ายังอยากใช้)
+========================================================= */
+app.post("/api/player-enter", (_req, res) => {
   let code = six();
-  // กันซ้ำเล็กน้อย
   while (rooms.has(code)) code = six();
-
   ensureRoom(code);
-
-  res.json({
+  return res.json({
     ok: true,
     code,
     scoreboard: {
@@ -45,7 +92,9 @@ app.post("/api/player-enter", (req, res) => {
   });
 });
 
-/* ===== WebSocket Signaling (mesh ตามรหัสห้อง) ===== */
+/* =========================================================
+   3) WebSocket Signaling (mesh ต่อห้องด้วยรหัส)
+========================================================= */
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 wss.on("connection", (ws) => {
@@ -66,13 +115,12 @@ wss.on("connection", (ws) => {
         ws.peerId   = pid;
         room.peers.set(pid, ws);
 
-        // ส่งรายชื่อเพื่อนที่อยู่ก่อนหน้าให้คนใหม่
         ws.send(JSON.stringify({
           type: "joined",
           yourId: pid,
           peers: [...room.peers.keys()].filter(i => i !== pid)
         }));
-        // แจ้งคนเก่า ๆ ว่ามีคนมาใหม่
+
         for (const [otherId, peerWs] of room.peers) {
           if (otherId === pid) continue;
           if (peerWs.readyState === peerWs.OPEN) {
@@ -82,7 +130,6 @@ wss.on("connection", (ws) => {
       }
     }
 
-    // รีเลย์สัญญาณ WebRTC แบบตัวต่อตัว
     if (["offer","answer","ice"].includes(msg.type)) {
       const room = rooms.get(ws.roomCode);
       if (!room) return;
